@@ -4,27 +4,17 @@ Creator note: Technogizguy / Dylan Maniatakes.
 
 ## Share It Right Now
 
-Because this project keeps the Home Assistant files under `home-assistant/`, the easiest ways to share it today are:
+Because this repository is already the dedicated Home Assistant package, the easiest ways to share it today are:
 
-1. Zip the contents of this `home-assistant/` folder and send it directly.
-2. Create a dedicated GitHub repo whose repository root is the content of this folder.
+1. Zip this repository and send it directly.
+2. Push this repository to a public GitHub repo.
 
 For HACS and store-style sharing, option 2 is the one you want.
-
-## Important Layout Note
-
-HACS expects the repository root to contain:
-
-- `custom_components/voltra/`
-- `hacs.json`
-- `README.md`
-
-That means this whole repo should not be published to HACS as-is. Instead, publish the `home-assistant/` folder as its own repository root.
 
 ## Recommended Path
 
 1. Create a new public GitHub repository, for example `beyond-power-voltra-home-assistant`.
-2. Copy the contents of this `home-assistant/` folder into that repo root.
+2. Push the contents of this repository to that repo root.
 3. Add your real GitHub links to `custom_components/voltra/manifest.json`:
    - `documentation`
    - `issue_tracker`

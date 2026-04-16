@@ -1,0 +1,376 @@
+# Replace `beyond_power_voltra` below if your entity IDs use a different prefix.
+title: Beyond Power Voltra
+views:
+  - title: Voltra
+    path: beyond-power-voltra
+    icon: mdi:dumbbell
+    badges: []
+    cards:
+      - type: markdown
+        content: |
+          ## Beyond Power Voltra
+          Quick workout control with mode-aware sections.
+
+          If your entities use a different prefix, replace `beyond_power_voltra`
+          throughout this file before importing it.
+
+      - type: grid
+        title: Session
+        columns: 2
+        square: false
+        cards:
+          - type: tile
+            entity: sensor.beyond_power_voltra_status
+            name: Status
+            vertical: false
+          - type: tile
+            entity: select.beyond_power_voltra_workout_mode
+            name: Workout mode
+            vertical: false
+          - type: tile
+            entity: binary_sensor.beyond_power_voltra_connected
+            name: Connected
+            color: state
+            vertical: false
+          - type: tile
+            entity: binary_sensor.beyond_power_voltra_control_ready
+            name: Control ready
+            color: state
+            vertical: false
+          - type: tile
+            entity: binary_sensor.beyond_power_voltra_ready_to_load
+            name: Ready to load
+            color: state
+            vertical: false
+          - type: tile
+            entity: switch.beyond_power_voltra_loaded
+            name: Loaded
+            features_position: bottom
+            vertical: false
+            features:
+              - type: "toggle"
+
+      - type: grid
+        title: Actions
+        columns: 2
+        square: false
+        cards:
+          - type: tile
+            entity: button.beyond_power_voltra_refresh_status
+            name: Refresh status
+            features_position: bottom
+            vertical: false
+            features:
+              - type: "button"
+                action_name: Refresh
+          - type: tile
+            entity: button.beyond_power_voltra_adjust_cable_length
+            name: Adjust cable length
+            features_position: bottom
+            vertical: false
+            features:
+              - type: "button"
+                action_name: Open
+
+      - type: grid
+        title: Live telemetry
+        columns: 2
+        square: false
+        cards:
+          - type: tile
+            entity: sensor.beyond_power_voltra_current_force
+            name: Current force
+            vertical: false
+            features_position: bottom
+            features:
+              - type: "trend-graph"
+                hours_to_show: 1
+                detail: true
+          - type: tile
+            entity: sensor.beyond_power_voltra_battery
+            name: Battery
+            vertical: false
+            features_position: bottom
+            features:
+              - type: "bar-gauge"
+                min: 0
+                max: 100
+          - type: tile
+            entity: sensor.beyond_power_voltra_rep_count
+            name: Reps
+            vertical: false
+          - type: tile
+            entity: sensor.beyond_power_voltra_set_count
+            name: Sets
+            vertical: false
+          - type: tile
+            entity: sensor.beyond_power_voltra_rep_phase
+            name: Phase
+            vertical: false
+          - type: tile
+            entity: sensor.beyond_power_voltra_cable_length
+            name: Cable length
+            vertical: false
+
+      - type: conditional
+        conditions:
+          - entity: select.beyond_power_voltra_workout_mode
+            state: "Inactive"
+        card:
+          type: markdown
+          content: |
+            ## Pick a mode
+            Start by choosing a workout mode above.
+
+            Once the unit reports **Control ready**, the mode-specific controls below
+            will become available.
+
+      - type: conditional
+        conditions:
+          - entity: select.beyond_power_voltra_workout_mode
+            state: "Weight Training"
+        card:
+          type: vertical-stack
+          cards:
+            - type: markdown
+              content: |
+                ## Weight Training
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - type: tile
+                  entity: number.beyond_power_voltra_target_load
+                  name: Weight
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+                - type: tile
+                  entity: select.beyond_power_voltra_resistance_experience
+                  name: Resistance experience
+                  vertical: false
+                - type: tile
+                  entity: switch.beyond_power_voltra_assist
+                  name: Assist
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "toggle"
+                - type: tile
+                  entity: switch.beyond_power_voltra_inverse_chains
+                  name: Inverse chains
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "toggle"
+                - type: tile
+                  entity: number.beyond_power_voltra_chains
+                  name: Chains
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: buttons
+                - type: tile
+                  entity: number.beyond_power_voltra_eccentric
+                  name: Eccentric
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: buttons
+
+      - type: conditional
+        conditions:
+          - entity: select.beyond_power_voltra_workout_mode
+            state: "Resistance Band"
+        card:
+          type: vertical-stack
+          cards:
+            - type: markdown
+              content: |
+                ## Resistance Band
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - type: tile
+                  entity: number.beyond_power_voltra_band_force
+                  name: Band force
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+                - type: tile
+                  entity: select.beyond_power_voltra_resistance_experience
+                  name: Resistance experience
+                  vertical: false
+                - type: tile
+                  entity: select.beyond_power_voltra_resistance_mode
+                  name: Resistance mode
+                  vertical: false
+                - type: tile
+                  entity: select.beyond_power_voltra_resistance_curve
+                  name: Resistance curve
+                  vertical: false
+                - type: tile
+                  entity: select.beyond_power_voltra_progressive_length
+                  name: Progressive length
+                  vertical: false
+            - type: conditional
+              conditions:
+                - entity: select.beyond_power_voltra_progressive_length
+                  state: "Band Length"
+              card:
+                type: tile
+                entity: number.beyond_power_voltra_band_length
+                name: Band length
+                features_position: bottom
+                vertical: false
+                features:
+                  - type: "numeric-input"
+                    style: slider
+
+      - type: conditional
+        conditions:
+          - entity: select.beyond_power_voltra_workout_mode
+            state: "Damper"
+        card:
+          type: vertical-stack
+          cards:
+            - type: markdown
+              content: |
+                ## Damper
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - type: tile
+                  entity: number.beyond_power_voltra_damper_level
+                  name: Damper level
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: buttons
+                - type: tile
+                  entity: select.beyond_power_voltra_resistance_experience
+                  name: Resistance experience
+                  vertical: false
+
+      - type: conditional
+        conditions:
+          - entity: select.beyond_power_voltra_workout_mode
+            state: "Isokinetic"
+        card:
+          type: vertical-stack
+          cards:
+            - type: markdown
+              content: |
+                ## Isokinetic
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - type: tile
+                  entity: number.beyond_power_voltra_target_speed
+                  name: Target speed
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+                - type: tile
+                  entity: select.beyond_power_voltra_eccentric_mode
+                  name: Eccentric mode
+                  vertical: false
+            - type: conditional
+              conditions:
+                - entity: select.beyond_power_voltra_eccentric_mode
+                  state: "Isokinetic"
+              card:
+                type: grid
+                columns: 2
+                square: false
+                cards:
+                  - type: tile
+                    entity: number.beyond_power_voltra_speed_limit
+                    name: Speed limit
+                    features_position: bottom
+                    vertical: false
+                    features:
+                      - type: "numeric-input"
+                        style: slider
+                  - type: tile
+                    entity: number.beyond_power_voltra_max_eccentric_load
+                    name: Max eccentric load
+                    features_position: bottom
+                    vertical: false
+                    features:
+                      - type: "numeric-input"
+                        style: buttons
+            - type: conditional
+              conditions:
+                - entity: select.beyond_power_voltra_eccentric_mode
+                  state: "Constant Resistance"
+              card:
+                type: tile
+                entity: number.beyond_power_voltra_constant_resistance
+                name: Constant resistance
+                features_position: bottom
+                vertical: false
+                features:
+                  - type: "numeric-input"
+                    style: buttons
+
+      - type: conditional
+        conditions:
+          - entity: select.beyond_power_voltra_workout_mode
+            state: "Isometric Test"
+        card:
+          type: vertical-stack
+          cards:
+            - type: markdown
+              content: |
+                ## Isometric Test
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_current_force
+                  name: Current force
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_peak_force
+                  name: Peak force
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_elapsed
+                  name: Elapsed
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_max_duration
+                  name: Max duration
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_max_force
+                  name: Max force
+                  vertical: false
+
+      - type: entities
+        title: Device details
+        show_header_toggle: false
+        entities:
+          - entity: number.beyond_power_voltra_cable_offset
+            name: Cable offset
+          - entity: sensor.beyond_power_voltra_firmware_version
+            name: Firmware version
+          - entity: sensor.beyond_power_voltra_serial_number
+            name: Serial number
+          - entity: sensor.beyond_power_voltra_activation_state
+            name: Activation state
+

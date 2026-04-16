@@ -16,7 +16,7 @@ It is built from the recovered protocol work already encoded in the Android app:
 
 - Home Assistant name: `Beyond Power Voltra`
 - Local brand assets: `custom_components/voltra/brand/icon.png` and `logo.png`
-- Source image: Beyond Power logo provided in this workspace
+- Source image: `AppIcons/Assets.xcassets/AppIcon.appiconset/1024.png` from the BeyondPower-Port workspace
 
 ## What It Exposes
 
@@ -46,10 +46,14 @@ The integration intentionally mirrors the Android app's conservative behavior:
 
 ## Sharing
 
-See [PUBLISHING.md](/Users/ticnitsi/Documents/BeyondPower-Port/home-assistant/PUBLISHING.md) for the clean path to share this privately now and prepare it for HACS later.
+See [PUBLISHING.md](/Users/ticnitsi/Documents/Beyond-Power-HomeAssistant/PUBLISHING.md) for the clean path to share this privately now and prepare it for HACS later.
+
+## Dashboard Template
+
+A ready-to-import Lovelace dashboard template is included in [dashboards/README.md](/Users/ticnitsi/Documents/Beyond-Power-HomeAssistant/dashboards/README.md).
 
 ## Notes
 
 - This integration assumes Home Assistant is running on hardware with reliable Bluetooth access to the Voltra.
 - The component keeps retrying the recovered bootstrap until the protocol validates.
-- All implementation files for this integration live under `home-assistant/`; nothing in `android/` was modified.
+- This repository is the shareable Home Assistant package for the integration.
