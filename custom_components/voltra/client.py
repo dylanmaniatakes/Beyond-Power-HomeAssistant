@@ -10,6 +10,12 @@ from bleak.exc import BleakError
 from homeassistant.components import bluetooth
 from homeassistant.exceptions import HomeAssistantError
 
+try:
+    from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+except ImportError:  # pragma: no cover - depends on Home Assistant runtime
+    BleakClientWithServiceCache = BleakClient
+    establish_connection = None
+
 from .const import (
     BOOTSTRAP_WRITE_PACING_SECONDS,
     CONFIRMED_RESPONSE_CHARACTERISTIC_UUIDS,
@@ -496,7 +502,10 @@ class VoltraBleClient:
             self._address,
             connectable=True,
         )
-        target: Any = ble_device or self._address
+        if ble_device is None:
+            raise VoltraApiError(
+                "VOLTRA is not currently reachable from a connectable Bluetooth adapter."
+            )
         self._push_state(
             replace(
                 self._state,
@@ -507,9 +516,7 @@ class VoltraBleClient:
                 status_message="Connecting to VOLTRA over Bluetooth.",
             ),
         )
-
-        client = BleakClient(target, disconnected_callback=self._handle_disconnect)
-        await client.connect()
+        client = await self._async_establish_connection(ble_device)
         self._client = client
         self._assemblers.clear()
         for characteristic_uuid in NOTIFY_CHARACTERISTIC_UUIDS:
@@ -529,6 +536,20 @@ class VoltraBleClient:
             ),
         )
         await self._async_send_bootstrap()
+
+    async def _async_establish_connection(self, ble_device: Any) -> BleakClient:
+        if establish_connection is not None:
+            return await establish_connection(
+                BleakClientWithServiceCache,
+                ble_device,
+                ble_device.name or self._configured_name or "Beyond Power Voltra",
+                disconnected_callback=self._handle_disconnect,
+                max_attempts=3,
+            )
+
+        client = BleakClient(ble_device, disconnected_callback=self._handle_disconnect)
+        await client.connect(timeout=10.0)
+        return client
 
     async def _async_send_bootstrap(self) -> None:
         await self._async_write_frames(
