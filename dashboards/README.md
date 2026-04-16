@@ -44,6 +44,7 @@ If your entity IDs are different:
 The template is designed around the integration's current entity model:
 
 - a quick session overview at the top
+- direct editable dropdown rows for workout mode and mode-specific settings
 - live telemetry in the middle
 - mode-specific controls that appear only for the active workout mode
 - a settings/diagnostics section at the bottom

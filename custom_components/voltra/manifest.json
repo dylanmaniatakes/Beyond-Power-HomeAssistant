@@ -1,13 +1,17 @@
 {
   "domain": "voltra",
   "name": "Beyond Power Voltra",
+  "documentation": "https://github.com/dylanmaniatakes/Beyond-Power-HomeAssistant#readme",
+  "issue_tracker": "https://github.com/dylanmaniatakes/Beyond-Power-HomeAssistant/issues",
   "bluetooth": [
     {
       "service_uuid": "e4dada34-0867-8783-9f70-2ca29216c7e4",
       "connectable": true
     }
   ],
-  "codeowners": [],
+  "codeowners": [
+    "@dylanmaniatakes"
+  ],
   "config_flow": true,
   "dependencies": [
     "bluetooth"

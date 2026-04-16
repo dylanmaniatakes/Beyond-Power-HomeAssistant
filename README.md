@@ -23,7 +23,8 @@ It is built from the recovered protocol work already encoded in the Android app:
 The custom component creates a BLE-backed Beyond Power Voltra device with:
 
 - sensors for battery, force, cable length, reps, sets, status, serial, firmware, activation state, and Isometric telemetry
-- switches for loaded, assist, and inverse chains
+- switches for load, workout modes, assist-friendly mode toggles, and inverse chains
+- covers for assistant-friendly percentage control of weight, band force/length, Damper, Isokinetic settings, and other adjustable values
 - numbers for target load, band force/length, Damper level, cable offset, Weight Training settings, and Isokinetic settings
 - selects for workout mode, resistance settings, and the Isokinetic eccentric mode
 - buttons for refresh and cable-length adjustment mode
