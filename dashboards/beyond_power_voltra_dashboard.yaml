@@ -50,8 +50,8 @@ views:
             color: state
             vertical: false
           - type: tile
-            entity: switch.beyond_power_voltra_loaded
-            name: Loaded
+            entity: switch.beyond_power_voltra_load
+            name: Load
             features_position: bottom
             vertical: false
             features:
@@ -62,22 +62,24 @@ views:
         columns: 2
         square: false
         cards:
-          - type: tile
+          - type: button
             entity: button.beyond_power_voltra_refresh_status
             name: Refresh status
-            features_position: bottom
-            vertical: false
-            features:
-              - type: "button"
-                action_name: Refresh
-          - type: tile
+            show_state: true
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.beyond_power_voltra_refresh_status
+          - type: button
             entity: button.beyond_power_voltra_adjust_cable_length
             name: Adjust cable length
-            features_position: bottom
-            vertical: false
-            features:
-              - type: "button"
-                action_name: Open
+            show_state: true
+            tap_action:
+              action: perform-action
+              perform_action: button.press
+              target:
+                entity_id: button.beyond_power_voltra_adjust_cable_length
 
       - type: grid
         title: Live telemetry
