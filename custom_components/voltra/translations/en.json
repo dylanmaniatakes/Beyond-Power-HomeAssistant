@@ -1,0 +1,24 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add Beyond Power Voltra",
+        "description": "Set up a Beyond Power Voltra using its Bluetooth MAC address.",
+        "data": {
+          "address": "Bluetooth address",
+          "name": "Name"
+        }
+      },
+      "confirm": {
+        "title": "Confirm Beyond Power Voltra",
+        "description": "Set up {name} at {address}?"
+      }
+    },
+    "error": {
+      "invalid_address": "Enter a valid Bluetooth MAC address."
+    },
+    "abort": {
+      "already_configured": "This Beyond Power Voltra is already configured."
+    }
+  }
+}
