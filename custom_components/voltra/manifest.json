@@ -1,8 +1,6 @@
 {
   "domain": "voltra",
   "name": "Beyond Power Voltra",
-  "documentation": "https://github.com/dylanmaniatakes/Beyond-Power-HomeAssistant#readme",
-  "issue_tracker": "https://github.com/dylanmaniatakes/Beyond-Power-HomeAssistant/issues",
   "bluetooth": [
     {
       "service_uuid": "e4dada34-0867-8783-9f70-2ca29216c7e4",
@@ -17,6 +15,8 @@
     "bluetooth",
     "bluetooth_adapters"
   ],
+  "documentation": "https://github.com/dylanmaniatakes/Beyond-Power-HomeAssistant#readme",
+  "issue_tracker": "https://github.com/dylanmaniatakes/Beyond-Power-HomeAssistant/issues",
   "iot_class": "local_push",
   "version": "0.1.0"
 }
