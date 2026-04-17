@@ -35,4 +35,4 @@ class VoltraControlEntity(VoltraEntity):
     @property
     def available(self) -> bool:
         state = self.coordinator.data
-        return state.available and state.protocol_validated and bool(state.ready)
+        return state.available and state.protocol_validated

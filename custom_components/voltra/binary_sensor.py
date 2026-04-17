@@ -48,7 +48,7 @@ DESCRIPTIONS: tuple[VoltraBinarySensorDescription, ...] = (
         key="protocol_validated",
         name="Control ready",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda state: state.ready if state.ready is not None else state.protocol_validated,
+        value_fn=lambda state: state.protocol_validated,
     ),
     VoltraBinarySensorDescription(
         key="low_battery",

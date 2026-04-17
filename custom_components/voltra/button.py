@@ -35,7 +35,7 @@ DESCRIPTIONS: tuple[VoltraButtonDescription, ...] = (
         name="Adjust cable length",
         icon="mdi:tape-measure",
         press_fn=lambda coordinator: coordinator.client.async_trigger_cable_length_mode(),
-        available_fn=lambda state: state.protocol_validated and bool(state.ready) and state.workout_state not in (None, 0),
+        available_fn=lambda state: state.protocol_validated and state.workout_state not in (None, 0),
     ),
 )
 
