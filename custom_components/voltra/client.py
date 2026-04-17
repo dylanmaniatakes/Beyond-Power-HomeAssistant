@@ -98,6 +98,7 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
+PARAM_READ_FRAME_IDS_PER_CHUNK = 2
 
 
 class VoltraApiError(HomeAssistantError):
@@ -122,6 +123,7 @@ class VoltraBleClient:
             device_name=configured_name,
         )
         self._client: BleakClient | None = None
+        self._transport_characteristic: Any = None
         self._runner_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._disconnect_event = asyncio.Event()
@@ -157,12 +159,10 @@ class VoltraBleClient:
             await self._async_send_bootstrap()
             return
         await self._async_write_frames(
-            [
-                (
-                    "refresh mode feature state",
-                    build_param_read_frame(STATUS_REFRESH_PARAMS, self._next_sequence()),
-                ),
-            ],
+            self._build_chunked_param_read_frames(
+                STATUS_REFRESH_PARAMS,
+                "refresh mode feature state",
+            ),
         )
 
     async def async_set_workout_mode(self, option: str) -> None:
@@ -518,10 +518,14 @@ class VoltraBleClient:
         )
         client = await self._async_establish_connection(ble_device)
         self._client = client
+        self._transport_characteristic = client.services.get_characteristic(
+            VOLTRA_TRANSPORT_CHARACTERISTIC_UUID,
+        )
         self._assemblers.clear()
         for characteristic_uuid in NOTIFY_CHARACTERISTIC_UUIDS:
             try:
-                await client.start_notify(characteristic_uuid, self._notification_handler)
+                characteristic = client.services.get_characteristic(characteristic_uuid) or characteristic_uuid
+                await client.start_notify(characteristic, self._notification_handler)
             except BleakError as err:
                 _LOGGER.debug("VOLTRA start_notify failed for %s: %s", characteristic_uuid, err)
 
@@ -552,9 +556,14 @@ class VoltraBleClient:
         return client
 
     async def _async_send_bootstrap(self) -> None:
-        await self._async_write_frames(
-            [(packet.label, packet.frame) for packet in OFFICIAL_BOOTSTRAP_PACKETS],
+        frames = [(packet.label, packet.frame) for packet in OFFICIAL_BOOTSTRAP_PACKETS[:-1]]
+        frames.extend(
+            self._build_chunked_param_read_frames(
+                MODE_FEATURE_STATUS_PARAMS,
+                "read mode feature state",
+            ),
         )
+        await self._async_write_frames(frames)
 
     async def _async_send_param_write(
         self,
@@ -573,10 +582,10 @@ class VoltraBleClient:
         frames: list[tuple[str, bytes]] = []
         for label, param_id, value in writes:
             frames.append((label, build_param_write_frame(param_id, value, self._next_sequence())))
-        frames.append(
-            (
+        frames.extend(
+            self._build_chunked_param_read_frames(
+                MODE_FEATURE_STATUS_PARAMS,
                 "read back mode feature state",
-                build_param_read_frame(MODE_FEATURE_STATUS_PARAMS, self._next_sequence()),
             ),
         )
         await self._async_write_frames(frames)
@@ -593,10 +602,22 @@ class VoltraBleClient:
         self._require_connected()
         assert self._client is not None
         self._push_state(replace(self._state, status_message=f"Writing {label}."))
+        characteristic = self._transport_characteristic or VOLTRA_TRANSPORT_CHARACTERISTIC_UUID
+        properties = {
+            str(prop).lower()
+            for prop in getattr(characteristic, "properties", [])
+        }
+        response = (
+            True
+            if "write" in properties
+            else False
+            if "write-without-response" in properties or "write_no_response" in properties
+            else True
+        )
         await self._client.write_gatt_char(
-            VOLTRA_TRANSPORT_CHARACTERISTIC_UUID,
+            characteristic,
             frame,
-            response=True,
+            response=response,
         )
 
     def _notification_handler(
@@ -652,6 +673,7 @@ class VoltraBleClient:
     async def _async_disconnect_internal(self) -> None:
         client = self._client
         self._client = None
+        self._transport_characteristic = None
         self._assemblers.clear()
         if client is None:
             return
@@ -668,6 +690,20 @@ class VoltraBleClient:
         sequence = self._sequence
         self._sequence = (self._sequence + 1) & 0xFFFF
         return sequence
+
+    def _build_chunked_param_read_frames(
+        self,
+        param_ids: tuple[int, ...] | list[int],
+        label: str,
+    ) -> list[tuple[str, bytes]]:
+        normalized = tuple(param_ids)
+        frames: list[tuple[str, bytes]] = []
+        for index in range(0, len(normalized), PARAM_READ_FRAME_IDS_PER_CHUNK):
+            chunk = normalized[index : index + PARAM_READ_FRAME_IDS_PER_CHUNK]
+            chunk_number = index // PARAM_READ_FRAME_IDS_PER_CHUNK + 1
+            chunk_label = label if len(normalized) <= PARAM_READ_FRAME_IDS_PER_CHUNK else f"{label} ({chunk_number})"
+            frames.append((chunk_label, build_param_read_frame(chunk, self._next_sequence())))
+        return frames
 
     def _require_connected(self) -> None:
         if self._client is None or not self._client.is_connected:
