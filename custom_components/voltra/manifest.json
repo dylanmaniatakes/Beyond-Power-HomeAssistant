@@ -3,8 +3,8 @@
   "name": "Beyond Power Voltra",
   "bluetooth": [
     {
-      "service_uuid": "e4dada34-0867-8783-9f70-2ca29216c7e4",
-      "connectable": true
+      "connectable": true,
+      "service_uuid": "e4dada34-0867-8783-9f70-2ca29216c7e4"
     }
   ],
   "codeowners": [
