@@ -45,9 +45,15 @@ class VoltraState:
     isometric_max_duration_seconds: int | None = None
     isometric_current_force_n: float | None = None
     isometric_peak_force_n: float | None = None
+    isometric_peak_relative_force_percent: float | None = None
     isometric_elapsed_millis: int | None = None
     isometric_telemetry_tick: int | None = None
     isometric_telemetry_start_tick: int | None = None
+    isometric_carrier_force_n: float | None = None
+    isometric_carrier_status_primary: int | None = None
+    isometric_carrier_status_secondary: int | None = None
+    isometric_waveform_samples_n: tuple[float, ...] = field(default_factory=tuple)
+    isometric_waveform_last_chunk_index: int | None = None
     set_count: int | None = None
     rep_count: int | None = None
     rep_phase: str | None = None

@@ -18,6 +18,8 @@ views:
         title: Mode control
         show_header_toggle: false
         entities:
+          - entity: text.beyond_power_voltra_device_name
+            name: Device name
           - entity: select.beyond_power_voltra_workout_mode
             name: Workout mode
           - entity: sensor.beyond_power_voltra_status
@@ -350,6 +352,10 @@ views:
                   name: Peak force
                   vertical: false
                 - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_peak_relative_force
+                  name: Peak relative
+                  vertical: false
+                - type: tile
                   entity: sensor.beyond_power_voltra_isometric_elapsed
                   name: Elapsed
                   vertical: false
@@ -360,6 +366,10 @@ views:
                 - type: tile
                   entity: sensor.beyond_power_voltra_isometric_max_force
                   name: Max force
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_waveform_samples
+                  name: Waveform samples
                   vertical: false
 
       - type: entities

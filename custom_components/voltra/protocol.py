@@ -12,6 +12,7 @@ CMD_ASYNC_STATE = 0x10
 CMD_PARAM_WRITE = 0x11
 CMD_SERIAL_INFO = 0x19
 CMD_HANDSHAKE_CHECK = 0x27
+CMD_SET_DEVICE_NAME = 0x4E
 CMD_DEVICE_NAME = 0x4F
 CMD_COMMON_STATE = 0x74
 CMD_FIRMWARE_INFO = 0x77
@@ -43,6 +44,7 @@ MIN_ISOKINETIC_SPEED_MMS = 100
 MAX_ISOKINETIC_SPEED_MMS = 2000
 MIN_CABLE_OFFSET_CM = 0
 MAX_CABLE_OFFSET_CM = 260
+DEVICE_NAME_MAX_BYTES = 21
 
 PARAM_BP_RUNTIME_POSITION_CM = 0x3E82
 PARAM_BP_RUNTIME_WIRE_WEIGHT_LBS = 0x3E83
@@ -74,6 +76,7 @@ PARAM_ISOMETRIC_MAX_FORCE = 0x5431
 PARAM_QUICK_CABLE_ADJUSTMENT = 0x54BC
 PARAM_MC_DEFAULT_OFFLEN_CM = 0x506A
 
+FITNESS_MODE_ISOMETRIC_ARMED = 0x0001
 FITNESS_MODE_STRENGTH_READY = 0x0004
 FITNESS_MODE_STRENGTH_LOADED = 0x0005
 FITNESS_MODE_TEST_SCREEN = 0x0085
@@ -125,6 +128,50 @@ STATUS_REFRESH_PARAMS: tuple[int, ...] = BATTERY_STATUS_PARAMS + MODE_FEATURE_ST
 
 LOW_BATTERY_THRESHOLD_PERCENT = 15
 LB_TO_NEWTONS = 4.4482216152605
+TELEMETRY_REP_TYPE = 0x81
+TELEMETRY_REP_LENGTH_MARKER = 0x2B
+TELEMETRY_REP_PHASE_OFFSET = 2
+TELEMETRY_SET_COUNT_OFFSET = 3
+TELEMETRY_REP_COUNT_OFFSET = 4
+TELEMETRY_ISOMETRIC_MIN_BYTES = 45
+TELEMETRY_ISOMETRIC_SUMMARY_BYTES = 39
+TELEMETRY_ISOMETRIC_STATUS_PRIMARY_OFFSET = 11
+TELEMETRY_ISOMETRIC_STATUS_SECONDARY_OFFSET = 13
+TELEMETRY_ISOMETRIC_TICK_OFFSET = 27
+TELEMETRY_ISOMETRIC_FORCE_OFFSET = 43
+TELEMETRY_ISOMETRIC_ACTIVE_MARKER = 2
+TELEMETRY_ISOMETRIC_PROGRESS_MARKER = 3
+TELEMETRY_ISOMETRIC_READY_MARKER = 4
+TELEMETRY_ISOMETRIC_COARSE_LIVE_FORCE_MARKER = 1
+TELEMETRY_ISOMETRIC_ARMED_MARKER = 10
+TELEMETRY_ISOMETRIC_COMPLETED_MARKER = 11
+TELEMETRY_ISOMETRIC_LIVE_FORCE_MARKER = 12
+TELEMETRY_ISOMETRIC_SUMMARY_TYPE = 0x80
+TELEMETRY_ISOMETRIC_SUMMARY_LENGTH_MARKER = 0x25
+TELEMETRY_ISOMETRIC_SUMMARY_PEAK_FORCE_OFFSET = 23
+TELEMETRY_ISOMETRIC_SUMMARY_PEAK_RELATIVE_FORCE_OFFSET = 29
+TELEMETRY_ISOMETRIC_SUMMARY_DURATION_SECONDS_OFFSET = 33
+TELEMETRY_ISOMETRIC_WAVEFORM_TYPE = 0x93
+MAX_REASONABLE_SET_COUNT = 1_000
+MAX_REASONABLE_REP_COUNT = 10_000
+ISOMETRIC_SAMPLE_RATE_MIN = 40
+ISOMETRIC_SAMPLE_RATE_MAX = 60
+MAX_REASONABLE_ISOMETRIC_DURATION_SECONDS = 60
+MAX_REASONABLE_ISOMETRIC_RELATIVE_FORCE_TENTHS_PERCENT = 1_000
+MAX_REASONABLE_ISOMETRIC_FORCE_N = 2_000.0
+MAX_REASONABLE_ISOMETRIC_GRAPH_FORCE_N = 2_000.0
+MAX_REASONABLE_ISOMETRIC_STATUS_WORD = 0x0200
+MAX_REASONABLE_ISOMETRIC_AUX_WORD = 4_000
+STALE_ISOMETRIC_SUMMARY_FORCE_TOLERANCE_N = 5.0
+STALE_ISOMETRIC_SUMMARY_ELAPSED_TOLERANCE_MILLIS = 250
+LEGACY_ISOMETRIC_PULL_FORCE_SCALE = 1.438
+LEGACY_ISOMETRIC_COARSE_FORCE_SCALE = 1.067
+ISOMETRIC_WAVEFORM_HEADER_BYTES = 6
+MAX_ISOMETRIC_WAVEFORM_SAMPLES = 2_400
+LEGACY_ISOMETRIC_STREAM_VARIANTS = frozenset({1, 2, 3})
+TELEMETRY_ISOMETRIC_COARSE_LIVE_FORCE_RANGE_N = (1.0, MAX_REASONABLE_ISOMETRIC_FORCE_N)
+TELEMETRY_ISOMETRIC_WAVEFORM_MARKERS = frozenset({0xCC, 0x82, 0xA8})
+ISOMETRIC_VENDOR_REFRESH_PAYLOAD = bytes((0x13, 0x01))
 
 SERIAL_REGEX = re.compile(r"M?B[0-9A-Z]{10,}")
 FIRMWARE_REGEX = re.compile(r"(?:EP|BP|MainControlv|MotorControl|BMS|PMU)[0-9A-Za-z.-]*\d+\.\d+")
@@ -294,6 +341,34 @@ def build_param_read_payload(param_ids: tuple[int, ...] | list[int]) -> bytes:
 
 def build_param_write_payload(param_id: int, value_bytes: bytes) -> bytes:
     return bytes((0x01, 0x00)) + encode_uint16_le(param_id) + value_bytes
+
+
+def build_device_name_payload(name: str) -> bytes:
+    trimmed = name.strip()
+    if not trimmed:
+        raise ValueError("Device name must not be blank.")
+    if len(trimmed) > 20:
+        raise ValueError("Device name must be 20 characters or fewer.")
+    if not trimmed[0].isalpha():
+        raise ValueError("Device name must start with a letter.")
+    if not all(
+        ord(char) in PRINTABLE_ASCII_RANGE and char not in {":", "\\", "|"}
+        for char in trimmed
+    ):
+        raise ValueError("Device name must use plain ASCII and cannot include :, \\, or |.")
+
+    ascii_name = trimmed.encode("ascii")
+    if len(ascii_name) > DEVICE_NAME_MAX_BYTES:
+        raise ValueError("Device name exceeds the VOLTRA payload size.")
+    return ascii_name + bytes(DEVICE_NAME_MAX_BYTES - len(ascii_name))
+
+
+def build_vendor_state_refresh_frame(seq: int) -> bytes:
+    return build_frame(
+        cmd=CMD_TELEMETRY,
+        payload=ISOMETRIC_VENDOR_REFRESH_PAYLOAD,
+        seq=seq,
+    )
 
 
 def encode_uint16_le(value: int) -> bytes:
@@ -469,10 +544,75 @@ def apply_packet_to_state(
     fitness_mode = _get_uint16(params, PARAM_BP_SET_FITNESS_MODE)
     workout_state = _get_uint8(params, PARAM_FITNESS_WORKOUT_STATE)
     rep_telemetry = _parse_rep_telemetry(packet)
-    isometric_telemetry = _parse_isometric_telemetry(packet, current, timestamp)
+    timestamp_millis = int(timestamp.timestamp() * 1000)
+    isometric_telemetry = _parse_isometric_telemetry(packet, current, timestamp_millis)
+    isometric_waveform = _parse_isometric_waveform(packet, current)
     workout_mode = workout_mode_label(fitness_mode, workout_state)
 
     leaving_isometric = workout_state is not None and workout_state != WORKOUT_STATE_ISOMETRIC
+    current_was_in_isometric = bool(current.workout_mode and current.workout_mode.startswith("Isometric Test"))
+    retain_completed_isometric_attempt = (
+        bool(current.isometric_waveform_samples_n)
+        or current.isometric_peak_relative_force_percent is not None
+    )
+    has_collected_isometric_live_sample = (
+        bool(current.isometric_waveform_samples_n)
+        or current.isometric_peak_relative_force_percent is not None
+        or current.isometric_telemetry_start_tick is not None
+    )
+    entering_fresh_isometric_screen = (
+        workout_state == WORKOUT_STATE_ISOMETRIC
+        and not current_was_in_isometric
+        and current.isometric_current_force_n is None
+        and current.isometric_telemetry_start_tick is None
+        and not current.isometric_waveform_samples_n
+        and isometric_telemetry is None
+        and isometric_waveform is None
+    )
+    ready_isometric_without_telemetry = (
+        workout_state == WORKOUT_STATE_ISOMETRIC
+        and is_ready_for_workout_state(fitness_mode, workout_state)
+        and isometric_telemetry is None
+        and not has_collected_isometric_live_sample
+    )
+    completed_legacy_isometric_attempt = (
+        isometric_telemetry is not None
+        and isometric_telemetry.current_force_n is None
+        and isometric_telemetry.carrier_status_secondary == TELEMETRY_ISOMETRIC_COMPLETED_MARKER
+    )
+
+    if entering_fresh_isometric_screen:
+        isometric_waveform_samples_n: tuple[float, ...] = ()
+    elif leaving_isometric and retain_completed_isometric_attempt:
+        isometric_waveform_samples_n = current.isometric_waveform_samples_n
+    elif leaving_isometric:
+        isometric_waveform_samples_n = ()
+    elif isometric_waveform is not None:
+        isometric_waveform_samples_n = isometric_waveform.samples_n
+    elif isometric_telemetry is not None and isometric_telemetry.current_force_n is not None:
+        base_samples = (
+            ()
+            if isometric_telemetry.starting_new_attempt
+            else current.isometric_waveform_samples_n
+        )
+        isometric_waveform_samples_n = (
+            base_samples + (isometric_telemetry.current_force_n,)
+        )[-MAX_ISOMETRIC_WAVEFORM_SAMPLES:]
+    else:
+        isometric_waveform_samples_n = current.isometric_waveform_samples_n
+
+    if entering_fresh_isometric_screen:
+        isometric_waveform_last_chunk_index = None
+    elif leaving_isometric and retain_completed_isometric_attempt:
+        isometric_waveform_last_chunk_index = current.isometric_waveform_last_chunk_index
+    elif leaving_isometric:
+        isometric_waveform_last_chunk_index = None
+    elif isometric_waveform is not None:
+        isometric_waveform_last_chunk_index = isometric_waveform.last_chunk_index
+    elif isometric_telemetry is not None and isometric_telemetry.starting_new_attempt:
+        isometric_waveform_last_chunk_index = None
+    else:
+        isometric_waveform_last_chunk_index = current.isometric_waveform_last_chunk_index
 
     next_state = replace(
         current,
@@ -550,34 +690,70 @@ def apply_packet_to_state(
         ),
         isometric_current_force_n=(
             None
-            if leaving_isometric
+            if entering_fresh_isometric_screen or leaving_isometric or ready_isometric_without_telemetry or completed_legacy_isometric_attempt
             else (
                 isometric_telemetry.current_force_n
-                if isometric_telemetry is not None
-                else current.isometric_current_force_n
+                if isometric_telemetry is not None and isometric_telemetry.current_force_n is not None
+                else (
+                    current.isometric_current_force_n
+                    if isometric_telemetry is None or has_collected_isometric_live_sample
+                    else None
+                )
             )
         ),
         isometric_peak_force_n=(
             None
-            if leaving_isometric
+            if entering_fresh_isometric_screen or (leaving_isometric and not retain_completed_isometric_attempt)
             else (
-                isometric_telemetry.peak_force_n
-                if isometric_telemetry is not None
-                else current.isometric_peak_force_n
+                current.isometric_peak_force_n
+                if leaving_isometric and retain_completed_isometric_attempt
+                else (
+                    isometric_telemetry.peak_force_n
+                    if isometric_telemetry is not None and isometric_telemetry.peak_force_n is not None
+                    else (
+                        current.isometric_peak_force_n
+                        if isometric_telemetry is None or has_collected_isometric_live_sample
+                        else None
+                    )
+                )
+            )
+        ),
+        isometric_peak_relative_force_percent=(
+            None
+            if entering_fresh_isometric_screen or (leaving_isometric and not retain_completed_isometric_attempt)
+            else (
+                current.isometric_peak_relative_force_percent
+                if leaving_isometric and retain_completed_isometric_attempt
+                else (
+                    isometric_telemetry.peak_relative_force_percent
+                    if isometric_telemetry is not None and (
+                        isometric_telemetry.starting_new_attempt
+                        or isometric_telemetry.peak_relative_force_percent is not None
+                    )
+                    else current.isometric_peak_relative_force_percent
+                )
             )
         ),
         isometric_elapsed_millis=(
             None
-            if leaving_isometric
+            if entering_fresh_isometric_screen or (leaving_isometric and not retain_completed_isometric_attempt)
             else (
-                isometric_telemetry.elapsed_millis
-                if isometric_telemetry is not None
-                else current.isometric_elapsed_millis
+                current.isometric_elapsed_millis
+                if leaving_isometric and retain_completed_isometric_attempt
+                else (
+                    isometric_telemetry.elapsed_millis
+                    if isometric_telemetry is not None and isometric_telemetry.elapsed_millis is not None
+                    else (
+                        current.isometric_elapsed_millis
+                        if isometric_telemetry is None or has_collected_isometric_live_sample
+                        else None
+                    )
+                )
             )
         ),
         isometric_telemetry_tick=(
             None
-            if leaving_isometric
+            if entering_fresh_isometric_screen or leaving_isometric
             else (
                 isometric_telemetry.tick
                 if isometric_telemetry is not None
@@ -586,13 +762,42 @@ def apply_packet_to_state(
         ),
         isometric_telemetry_start_tick=(
             None
-            if leaving_isometric
+            if entering_fresh_isometric_screen or leaving_isometric
             else (
                 isometric_telemetry.start_tick
                 if isometric_telemetry is not None
                 else current.isometric_telemetry_start_tick
             )
         ),
+        isometric_carrier_force_n=(
+            None
+            if entering_fresh_isometric_screen or leaving_isometric
+            else (
+                isometric_telemetry.raw_carrier_force_n
+                if isometric_telemetry is not None
+                else current.isometric_carrier_force_n
+            )
+        ),
+        isometric_carrier_status_primary=(
+            None
+            if entering_fresh_isometric_screen or leaving_isometric
+            else (
+                isometric_telemetry.carrier_status_primary
+                if isometric_telemetry is not None
+                else current.isometric_carrier_status_primary
+            )
+        ),
+        isometric_carrier_status_secondary=(
+            None
+            if entering_fresh_isometric_screen or leaving_isometric
+            else (
+                isometric_telemetry.carrier_status_secondary
+                if isometric_telemetry is not None
+                else current.isometric_carrier_status_secondary
+            )
+        ),
+        isometric_waveform_samples_n=isometric_waveform_samples_n,
+        isometric_waveform_last_chunk_index=isometric_waveform_last_chunk_index,
         set_count=rep_telemetry.set_count if rep_telemetry is not None else current.set_count,
         rep_count=rep_telemetry.count if rep_telemetry is not None else current.rep_count,
         rep_phase=rep_telemetry.phase if rep_telemetry is not None else current.rep_phase,
@@ -744,7 +949,8 @@ def is_isometric_screen_mode(mode: int | None) -> bool:
 
 def is_load_engaged_for_workout_state(mode: int | None, workout_state: int | None) -> bool:
     if workout_state == WORKOUT_STATE_ISOMETRIC:
-        return normalized_fitness_mode(mode) == FITNESS_MODE_STRENGTH_LOADED
+        normalized = normalized_fitness_mode(mode)
+        return normalized in (FITNESS_MODE_ISOMETRIC_ARMED, FITNESS_MODE_STRENGTH_LOADED)
     return is_loaded_fitness_mode(mode)
 
 
@@ -905,35 +1111,91 @@ class RepTelemetry:
 class IsometricTelemetry:
     current_force_n: float | None
     peak_force_n: float | None
+    peak_relative_force_percent: float | None
     elapsed_millis: int | None
     tick: int
     start_tick: int | None
+    starting_new_attempt: bool
+    raw_carrier_force_n: float | None
+    carrier_status_primary: int | None
+    carrier_status_secondary: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class IsometricWaveform:
+    samples_n: tuple[float, ...]
+    last_chunk_index: int
 
 
 def _parse_rep_telemetry(packet: ParsedVoltraPacket) -> RepTelemetry | None:
     payload = packet.payload
     if packet.command_id != CMD_TELEMETRY or len(payload) < 6:
         return None
-    if payload[0] != 0x81 or payload[1] != 0x2B:
+    if payload[0] != TELEMETRY_REP_TYPE or payload[1] != TELEMETRY_REP_LENGTH_MARKER:
         return None
 
-    set_count = payload[3]
-    rep_count = int.from_bytes(payload[4:6], byteorder="big", signed=False)
-    if not (0 <= set_count <= 1000 and 0 <= rep_count <= 10_000):
+    set_count = payload[TELEMETRY_SET_COUNT_OFFSET]
+    rep_count = _u16be(payload, TELEMETRY_REP_COUNT_OFFSET)
+    if not (0 <= set_count <= MAX_REASONABLE_SET_COUNT and 0 <= rep_count <= MAX_REASONABLE_REP_COUNT):
         return None
     return RepTelemetry(
         set_count=set_count,
         count=rep_count,
-        phase=_rep_phase_label(payload[2]),
+        phase=_rep_phase_label(payload[TELEMETRY_REP_PHASE_OFFSET]),
     )
 
 
 def _parse_isometric_telemetry(
     packet: ParsedVoltraPacket,
     current: VoltraState,
-    now: datetime,
+    now_millis: int,
 ) -> IsometricTelemetry | None:
-    return _parse_legacy_isometric_telemetry(packet, current) or _parse_b4_isometric_telemetry(packet, current, now)
+    return (
+        _parse_legacy_isometric_telemetry(packet, current)
+        or _parse_isometric_summary_telemetry(packet, current, now_millis)
+        or _parse_b4_isometric_telemetry(packet, current, now_millis)
+    )
+
+
+def _parse_isometric_waveform(
+    packet: ParsedVoltraPacket,
+    current: VoltraState,
+) -> IsometricWaveform | None:
+    payload = packet.payload
+    if packet.command_id != CMD_TELEMETRY or len(payload) < ISOMETRIC_WAVEFORM_HEADER_BYTES:
+        return None
+    if payload[0] != TELEMETRY_ISOMETRIC_WAVEFORM_TYPE or payload[1] not in TELEMETRY_ISOMETRIC_WAVEFORM_MARKERS:
+        return None
+
+    chunk_index = payload[2]
+    declared_sample_count = _u16le(payload, 4)
+    available_sample_count = (len(payload) - ISOMETRIC_WAVEFORM_HEADER_BYTES) // 2
+    sample_count = min(declared_sample_count, available_sample_count)
+    if sample_count <= 0:
+        return None
+
+    parsed_samples: list[float] = []
+    for index in range(sample_count):
+        offset = ISOMETRIC_WAVEFORM_HEADER_BYTES + (index * 2)
+        sample_n = (_u16le(payload, offset) / 10.0) * LB_TO_NEWTONS
+        if not 0.0 <= sample_n <= MAX_REASONABLE_ISOMETRIC_GRAPH_FORCE_N:
+            return None
+        parsed_samples.append(sample_n)
+    if not parsed_samples:
+        return None
+
+    should_reset = (
+        chunk_index <= 1
+        or current.isometric_waveform_last_chunk_index is None
+        or chunk_index <= current.isometric_waveform_last_chunk_index
+    )
+    if should_reset:
+        merged_samples = tuple(parsed_samples)
+    else:
+        merged_samples = (
+            current.isometric_waveform_samples_n + tuple(parsed_samples)
+        )[-MAX_ISOMETRIC_WAVEFORM_SAMPLES:]
+    return IsometricWaveform(samples_n=merged_samples, last_chunk_index=chunk_index)
 
 
 def _parse_legacy_isometric_telemetry(
@@ -941,67 +1203,199 @@ def _parse_legacy_isometric_telemetry(
     current: VoltraState,
 ) -> IsometricTelemetry | None:
     payload = packet.payload
-    if packet.command_id != CMD_TELEMETRY or len(payload) < 45:
+    if packet.command_id != CMD_TELEMETRY or len(payload) < TELEMETRY_ISOMETRIC_MIN_BYTES:
         return None
-    if payload[0] != 0x81 or payload[1] != 0x2B:
+    if payload[0] != TELEMETRY_REP_TYPE or payload[1] != TELEMETRY_REP_LENGTH_MARKER:
         return None
     if any(byte != 0 for byte in payload[2:11]) or any(byte != 0 for byte in payload[31:43]):
         return None
 
-    tick = _u32le(payload, 27)
-    status_primary = _u16le(payload, 11)
-    status_secondary = _u16le(payload, 13)
-    active_frame = status_secondary == 2 and 0 <= status_primary <= 6
-    if not active_frame:
-        if status_secondary in (4, 10):
-            return IsometricTelemetry(
-                current_force_n=None,
-                peak_force_n=current.isometric_peak_force_n,
-                elapsed_millis=current.isometric_elapsed_millis,
-                tick=tick,
-                start_tick=None,
-            )
+    tick = _u32le(payload, TELEMETRY_ISOMETRIC_TICK_OFFSET)
+    status_primary = _u16le(payload, TELEMETRY_ISOMETRIC_STATUS_PRIMARY_OFFSET)
+    status_secondary = _u16le(payload, TELEMETRY_ISOMETRIC_STATUS_SECONDARY_OFFSET)
+    raw_carrier_force_n = (_u16le(payload, TELEMETRY_ISOMETRIC_FORCE_OFFSET) / 10.0) * LEGACY_ISOMETRIC_COARSE_FORCE_SCALE
+
+    if status_secondary == TELEMETRY_ISOMETRIC_LIVE_FORCE_MARKER:
+        current_force_n = status_primary * LEGACY_ISOMETRIC_PULL_FORCE_SCALE
+        if not 0.0 <= current_force_n <= MAX_REASONABLE_ISOMETRIC_FORCE_N:
+            return None
+        starting_new_attempt = (
+            current.isometric_current_force_n is None
+            or current.isometric_telemetry_start_tick is None
+            or current.isometric_carrier_status_secondary != TELEMETRY_ISOMETRIC_LIVE_FORCE_MARKER
+        )
+        start_tick = tick if starting_new_attempt else current.isometric_telemetry_start_tick or tick
+        elapsed_millis = max(0, tick - start_tick)
+        peak_force_n = (
+            current_force_n
+            if starting_new_attempt
+            else max(current.isometric_peak_force_n or current_force_n, current_force_n)
+        )
+        return IsometricTelemetry(
+            current_force_n=current_force_n,
+            peak_force_n=peak_force_n,
+            peak_relative_force_percent=current.isometric_peak_relative_force_percent,
+            elapsed_millis=elapsed_millis,
+            tick=tick,
+            start_tick=start_tick,
+            starting_new_attempt=starting_new_attempt,
+            raw_carrier_force_n=raw_carrier_force_n,
+            carrier_status_primary=status_primary,
+            carrier_status_secondary=status_secondary,
+        )
+
+    if (
+        status_primary == 0
+        and status_secondary == TELEMETRY_ISOMETRIC_COARSE_LIVE_FORCE_MARKER
+        and TELEMETRY_ISOMETRIC_COARSE_LIVE_FORCE_RANGE_N[0]
+        <= raw_carrier_force_n
+        <= TELEMETRY_ISOMETRIC_COARSE_LIVE_FORCE_RANGE_N[1]
+    ):
+        current_force_n = raw_carrier_force_n
+        starting_new_attempt = (
+            current.isometric_current_force_n is None
+            or current.isometric_telemetry_start_tick is None
+            or current.isometric_carrier_status_secondary != TELEMETRY_ISOMETRIC_COARSE_LIVE_FORCE_MARKER
+        )
+        start_tick = tick if starting_new_attempt else current.isometric_telemetry_start_tick or tick
+        elapsed_millis = max(0, tick - start_tick)
+        peak_force_n = (
+            current_force_n
+            if starting_new_attempt
+            else max(current.isometric_peak_force_n or current_force_n, current_force_n)
+        )
+        return IsometricTelemetry(
+            current_force_n=current_force_n,
+            peak_force_n=peak_force_n,
+            peak_relative_force_percent=current.isometric_peak_relative_force_percent,
+            elapsed_millis=elapsed_millis,
+            tick=tick,
+            start_tick=start_tick,
+            starting_new_attempt=starting_new_attempt,
+            raw_carrier_force_n=raw_carrier_force_n,
+            carrier_status_primary=status_primary,
+            carrier_status_secondary=status_secondary,
+        )
+
+    if status_secondary not in {
+        TELEMETRY_ISOMETRIC_ACTIVE_MARKER,
+        TELEMETRY_ISOMETRIC_PROGRESS_MARKER,
+        TELEMETRY_ISOMETRIC_READY_MARKER,
+        TELEMETRY_ISOMETRIC_ARMED_MARKER,
+        TELEMETRY_ISOMETRIC_COMPLETED_MARKER,
+    }:
         return None
 
-    current_force_n = _u16le(payload, 43) / 10.0
-    starting_new_attempt = (
-        current.isometric_current_force_n is None or current.isometric_telemetry_start_tick is None
-    )
-    start_tick = tick if starting_new_attempt else current.isometric_telemetry_start_tick or tick
-    elapsed_millis = max(0, tick - start_tick)
-    peak_force_n = (
-        current_force_n
-        if starting_new_attempt
-        else max(current.isometric_peak_force_n or current_force_n, current_force_n)
+    retain_completed_attempt = (
+        bool(current.isometric_waveform_samples_n)
+        or current.isometric_peak_relative_force_percent is not None
+        or current.isometric_telemetry_start_tick is not None
     )
     return IsometricTelemetry(
-        current_force_n=current_force_n,
-        peak_force_n=peak_force_n,
-        elapsed_millis=elapsed_millis,
+        current_force_n=None,
+        peak_force_n=current.isometric_peak_force_n if retain_completed_attempt else None,
+        peak_relative_force_percent=(
+            current.isometric_peak_relative_force_percent if retain_completed_attempt else None
+        ),
+        elapsed_millis=current.isometric_elapsed_millis if retain_completed_attempt else None,
         tick=tick,
-        start_tick=start_tick,
+        start_tick=current.isometric_telemetry_start_tick if retain_completed_attempt else None,
+        starting_new_attempt=False,
+        raw_carrier_force_n=raw_carrier_force_n,
+        carrier_status_primary=status_primary,
+        carrier_status_secondary=status_secondary,
+    )
+
+
+def _parse_isometric_summary_telemetry(
+    packet: ParsedVoltraPacket,
+    current: VoltraState,
+    now_millis: int,
+) -> IsometricTelemetry | None:
+    payload = packet.payload
+    if packet.command_id != CMD_TELEMETRY or len(payload) != TELEMETRY_ISOMETRIC_SUMMARY_BYTES:
+        return None
+    if (
+        payload[0] != TELEMETRY_ISOMETRIC_SUMMARY_TYPE
+        or payload[1] != TELEMETRY_ISOMETRIC_SUMMARY_LENGTH_MARKER
+    ):
+        return None
+
+    has_collected_attempt_evidence = (
+        current.isometric_telemetry_start_tick is not None
+        or current.isometric_current_force_n is not None
+        or bool(current.isometric_waveform_samples_n)
+    )
+    if not has_collected_attempt_evidence:
+        return None
+
+    peak_force_tenths_n = _u16le(payload, TELEMETRY_ISOMETRIC_SUMMARY_PEAK_FORCE_OFFSET)
+    peak_relative_tenths_percent = _u16le(payload, TELEMETRY_ISOMETRIC_SUMMARY_PEAK_RELATIVE_FORCE_OFFSET)
+    duration_seconds = _u16le(payload, TELEMETRY_ISOMETRIC_SUMMARY_DURATION_SECONDS_OFFSET)
+    if not 0 <= peak_force_tenths_n <= int(MAX_REASONABLE_ISOMETRIC_FORCE_N * 10):
+        return None
+    if not 0 <= peak_relative_tenths_percent <= MAX_REASONABLE_ISOMETRIC_RELATIVE_FORCE_TENTHS_PERCENT:
+        return None
+    if not 0 <= duration_seconds <= MAX_REASONABLE_ISOMETRIC_DURATION_SECONDS:
+        return None
+
+    peak_force_n = peak_force_tenths_n / 10.0
+    elapsed_millis = duration_seconds * 1_000
+    summary_looks_stale = (
+        current.isometric_peak_force_n is not None
+        and peak_force_n + STALE_ISOMETRIC_SUMMARY_FORCE_TOLERANCE_N < current.isometric_peak_force_n
+    ) or (
+        current.isometric_elapsed_millis is not None
+        and elapsed_millis + STALE_ISOMETRIC_SUMMARY_ELAPSED_TOLERANCE_MILLIS < current.isometric_elapsed_millis
+    )
+    if summary_looks_stale:
+        return None
+
+    return IsometricTelemetry(
+        current_force_n=None,
+        peak_force_n=peak_force_n,
+        peak_relative_force_percent=peak_relative_tenths_percent / 10.0,
+        elapsed_millis=elapsed_millis,
+        tick=current.isometric_telemetry_tick or now_millis,
+        start_tick=current.isometric_telemetry_start_tick,
+        starting_new_attempt=False,
+        raw_carrier_force_n=current.isometric_carrier_force_n,
+        carrier_status_primary=current.isometric_carrier_status_primary,
+        carrier_status_secondary=current.isometric_carrier_status_secondary,
     )
 
 
 def _parse_b4_isometric_telemetry(
     packet: ParsedVoltraPacket,
     current: VoltraState,
-    now: datetime,
+    now_millis: int,
 ) -> IsometricTelemetry | None:
     payload = packet.payload
-    if packet.command_id != CMD_ISOMETRIC_STREAM or len(payload) != 8:
+    if packet.command_id != CMD_ISOMETRIC_STREAM:
         return None
-    if _u16le(payload, 2) not in {0x0004, 0x0005, 0x0006, 0x0007}:
+    if len(payload) == 8:
+        return (
+            _parse_legacy_b4_isometric_telemetry(payload, current, now_millis)
+            or _parse_modern_b4_isometric_telemetry(payload, current, now_millis)
+        )
+    if len(payload) == 12:
+        return _parse_extended_modern_b4_isometric_telemetry(payload, current, now_millis)
+    return None
+
+
+def _parse_legacy_b4_isometric_telemetry(
+    payload: bytes,
+    current: VoltraState,
+    now_millis: int,
+) -> IsometricTelemetry | None:
+    if _u16le(payload, 2) not in LEGACY_ISOMETRIC_STREAM_VARIANTS:
         return None
-    if not 40 <= _u16le(payload, 6) <= 60:
+    if _u16le(payload, 6) not in range(ISOMETRIC_SAMPLE_RATE_MIN, ISOMETRIC_SAMPLE_RATE_MAX + 1):
         return None
 
-    current_force_lb = float(_u16le(payload, 0))
-    if not 0.0 <= current_force_lb <= 220.0:
+    current_force_n = _u16le(payload, 0) * LB_TO_NEWTONS
+    if not 0.0 <= current_force_n <= MAX_REASONABLE_ISOMETRIC_FORCE_N:
         return None
-
-    current_force_n = current_force_lb * LB_TO_NEWTONS
-    now_millis = int(now.timestamp() * 1000)
     starting_new_attempt = (
         current.isometric_current_force_n is None or current.isometric_telemetry_start_tick is None
     )
@@ -1015,9 +1409,104 @@ def _parse_b4_isometric_telemetry(
     return IsometricTelemetry(
         current_force_n=current_force_n,
         peak_force_n=peak_force_n,
+        peak_relative_force_percent=None,
         elapsed_millis=elapsed_millis,
         tick=now_millis,
         start_tick=start_tick,
+        starting_new_attempt=starting_new_attempt,
+        raw_carrier_force_n=current_force_n,
+        carrier_status_primary=_u16le(payload, 2),
+        carrier_status_secondary=None,
+    )
+
+
+def _parse_modern_b4_isometric_telemetry(
+    payload: bytes,
+    current: VoltraState,
+    now_millis: int,
+) -> IsometricTelemetry | None:
+    current_force_n = float(_u16le(payload, 0))
+    status_word = _u16le(payload, 2)
+    reserved_word = _u16le(payload, 4)
+    trailing_word = _u16le(payload, 6)
+    if not 0.0 <= current_force_n <= MAX_REASONABLE_ISOMETRIC_FORCE_N:
+        return None
+    if status_word not in range(0, MAX_REASONABLE_ISOMETRIC_STATUS_WORD + 1):
+        return None
+    if reserved_word not in range(0, MAX_REASONABLE_ISOMETRIC_AUX_WORD + 1):
+        return None
+    if trailing_word not in range(0, MAX_REASONABLE_ISOMETRIC_AUX_WORD + 1):
+        return None
+
+    starting_new_attempt = (
+        current.isometric_current_force_n is None or current.isometric_telemetry_start_tick is None
+    )
+    start_tick = now_millis if starting_new_attempt else current.isometric_telemetry_start_tick or now_millis
+    elapsed_millis = max(0, now_millis - start_tick)
+    peak_force_n = (
+        current_force_n
+        if starting_new_attempt
+        else max(current.isometric_peak_force_n or current_force_n, current_force_n)
+    )
+    return IsometricTelemetry(
+        current_force_n=current_force_n,
+        peak_force_n=peak_force_n,
+        peak_relative_force_percent=None,
+        elapsed_millis=elapsed_millis,
+        tick=now_millis,
+        start_tick=start_tick,
+        starting_new_attempt=starting_new_attempt,
+        raw_carrier_force_n=current_force_n,
+        carrier_status_primary=status_word,
+        carrier_status_secondary=None,
+    )
+
+
+def _parse_extended_modern_b4_isometric_telemetry(
+    payload: bytes,
+    current: VoltraState,
+    now_millis: int,
+) -> IsometricTelemetry | None:
+    current_force_n = float(_u16le(payload, 0))
+    aux_peak_word = _u16le(payload, 2)
+    aux_elapsed_word = _u16le(payload, 4)
+    status_word = _u16le(payload, 6)
+    status_aux_word = _u16le(payload, 8)
+    trailing_word = _u16le(payload, 10)
+    if not 0.0 <= current_force_n <= MAX_REASONABLE_ISOMETRIC_FORCE_N:
+        return None
+    if aux_peak_word not in range(0, MAX_REASONABLE_ISOMETRIC_AUX_WORD + 1):
+        return None
+    if aux_elapsed_word not in range(0, MAX_REASONABLE_ISOMETRIC_AUX_WORD + 1):
+        return None
+    if status_word not in range(0, MAX_REASONABLE_ISOMETRIC_AUX_WORD + 1):
+        return None
+    if status_aux_word not in range(0, MAX_REASONABLE_ISOMETRIC_AUX_WORD + 1):
+        return None
+    if trailing_word not in range(0, MAX_REASONABLE_ISOMETRIC_AUX_WORD + 1):
+        return None
+
+    starting_new_attempt = (
+        current.isometric_current_force_n is None or current.isometric_telemetry_start_tick is None
+    )
+    start_tick = now_millis if starting_new_attempt else current.isometric_telemetry_start_tick or now_millis
+    elapsed_millis = max(0, now_millis - start_tick)
+    peak_force_n = (
+        current_force_n
+        if starting_new_attempt
+        else max(current.isometric_peak_force_n or current_force_n, current_force_n)
+    )
+    return IsometricTelemetry(
+        current_force_n=current_force_n,
+        peak_force_n=peak_force_n,
+        peak_relative_force_percent=None,
+        elapsed_millis=elapsed_millis,
+        tick=now_millis,
+        start_tick=start_tick,
+        starting_new_attempt=starting_new_attempt,
+        raw_carrier_force_n=current_force_n,
+        carrier_status_primary=status_word,
+        carrier_status_secondary=status_aux_word,
     )
 
 
@@ -1031,6 +1520,12 @@ def _rep_phase_label(phase: int) -> str:
     if phase == 3:
         return "Return"
     return f"Phase {phase}"
+
+
+def _u16be(payload: bytes, offset: int) -> int:
+    if offset + 1 >= len(payload):
+        return -1
+    return int.from_bytes(payload[offset:offset + 2], byteorder="big", signed=False)
 
 
 def _u16le(payload: bytes, offset: int) -> int:

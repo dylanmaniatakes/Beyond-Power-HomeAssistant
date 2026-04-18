@@ -96,6 +96,15 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         available_fn=lambda state: state.workout_state == 8 or state.isometric_peak_force_n is not None,
     ),
     VoltraSensorDescription(
+        key="isometric_peak_relative_force",
+        name="Isometric peak relative force",
+        icon="mdi:percent",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.isometric_peak_relative_force_percent,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_peak_relative_force_percent is not None,
+    ),
+    VoltraSensorDescription(
         key="isometric_elapsed",
         name="Isometric elapsed",
         device_class=SensorDeviceClass.DURATION,
@@ -121,6 +130,40 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda state: state.isometric_max_duration_seconds,
         available_fn=lambda state: state.workout_state == 8 or state.isometric_max_duration_seconds is not None,
+    ),
+    VoltraSensorDescription(
+        key="isometric_waveform_samples",
+        name="Isometric waveform samples",
+        icon="mdi:chart-timeline-variant",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: len(state.isometric_waveform_samples_n),
+        available_fn=lambda state: state.workout_state == 8 or bool(state.isometric_waveform_samples_n),
+    ),
+    VoltraSensorDescription(
+        key="isometric_carrier_force",
+        name="Isometric carrier force",
+        icon="mdi:pulse",
+        native_unit_of_measurement="N",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda state: state.isometric_carrier_force_n,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_carrier_force_n is not None,
+    ),
+    VoltraSensorDescription(
+        key="isometric_carrier_status_primary",
+        name="Isometric carrier status primary",
+        icon="mdi:numeric",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda state: state.isometric_carrier_status_primary,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_carrier_status_primary is not None,
+    ),
+    VoltraSensorDescription(
+        key="isometric_carrier_status_secondary",
+        name="Isometric carrier status secondary",
+        icon="mdi:numeric",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda state: state.isometric_carrier_status_secondary,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_carrier_status_secondary is not None,
     ),
     VoltraSensorDescription(
         key="serial_number",
@@ -188,5 +231,11 @@ class VoltraSensor(VoltraEntity, SensorEntity):
             }
             if state.last_error is not None:
                 attributes["last_error"] = state.last_error
+            if state.device_name is not None:
+                attributes["device_name"] = state.device_name
             return attributes
+        if self.entity_description.key == "isometric_waveform_samples":
+            return {
+                "last_chunk_index": state.isometric_waveform_last_chunk_index,
+            }
         return None

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from bleak import BleakClient
@@ -24,6 +25,7 @@ from .const import (
     NOTIFY_CHARACTERISTIC_UUIDS,
     PERIODIC_REFRESH_INTERVAL_SECONDS,
     PROTOCOL_RETRY_INTERVAL_SECONDS,
+    VOLTRA_COMMAND_CHARACTERISTIC_UUID,
     VOLTRA_TRANSPORT_CHARACTERISTIC_UUID,
 )
 from .models import VoltraState
@@ -31,6 +33,9 @@ from .protocol import (
     AUTO_ISOKINETIC_SPEED_MMS,
     BATTERY_STATUS_PARAMS,
     CMD_PARAM_READ,
+    CMD_SET_DEVICE_NAME,
+    FITNESS_MODE_ISOMETRIC_ARMED,
+    FITNESS_MODE_TEST_SCREEN,
     FITNESS_MODE_STRENGTH_LOADED,
     FITNESS_MODE_STRENGTH_READY,
     FrameAssembler,
@@ -60,6 +65,7 @@ from .protocol import (
     PARAM_BP_CHAINS_WEIGHT,
     PARAM_BP_ECCENTRIC_WEIGHT,
     PARAM_BP_SET_FITNESS_MODE,
+    PARAM_BP_RUNTIME_POSITION_CM,
     PARAM_EP_ISOKINETIC_TARGET_SPEED_MMS,
     PARAM_EP_RESISTANCE_BAND_INVERSE,
     PARAM_EP_SCR_SWITCH,
@@ -85,8 +91,11 @@ from .protocol import (
     WORKOUT_STATE_ISOMETRIC,
     WORKOUT_STATE_RESISTANCE_BAND,
     apply_packet_to_state,
+    build_device_name_payload,
+    build_frame,
     build_param_read_frame,
     build_param_write_frame,
+    build_vendor_state_refresh_frame,
     encode_int16_le,
     encode_uint16_le,
     encode_uint32_le,
@@ -99,6 +108,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 PARAM_READ_FRAME_IDS_PER_CHUNK = 2
+ISOMETRIC_VENDOR_REFRESH_INTERVAL_SECONDS = 0.5
+ISOMETRIC_VENDOR_REFRESH_BURST_SECONDS = 3.0
 
 
 class VoltraApiError(HomeAssistantError):
@@ -123,12 +134,14 @@ class VoltraBleClient:
             device_name=configured_name,
         )
         self._client: BleakClient | None = None
+        self._command_characteristic: Any = None
         self._transport_characteristic: Any = None
         self._runner_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._disconnect_event = asyncio.Event()
         self._write_lock = asyncio.Lock()
         self._assemblers: dict[str, FrameAssembler] = {}
+        self._isometric_vendor_refresh_until = 0.0
         self._sequence = 7
 
     @property
@@ -186,6 +199,35 @@ class VoltraBleClient:
             param_id=PARAM_BP_BASE_WEIGHT,
             value=encode_uint16_le(self._clamp_round(value, MIN_TARGET_LB, MAX_TARGET_LB)),
             label="set target load",
+        )
+
+    async def async_set_device_name(self, name: str) -> None:
+        self._require_connected()
+        trimmed = name.strip()
+        try:
+            payload = build_device_name_payload(trimmed)
+        except ValueError as err:
+            raise VoltraApiError(str(err)) from err
+        frame = build_frame(
+            cmd=CMD_SET_DEVICE_NAME,
+            payload=payload,
+            seq=self._next_sequence(),
+        )
+        async with self._write_lock:
+            await self._async_write_frame_to_characteristic_locked(
+                label=f'set device name to "{trimmed}"',
+                frame=frame,
+                characteristic=self._command_characteristic or VOLTRA_COMMAND_CHARACTERISTIC_UUID,
+            )
+
+        self._configured_name = trimmed
+        self._push_state(
+            replace(
+                self._state,
+                configured_name=trimmed,
+                device_name=trimmed,
+                status_message=f'Queued device rename to "{trimmed}".',
+            ),
         )
 
     async def async_set_assist_mode(self, enabled: bool) -> None:
@@ -290,6 +332,7 @@ class VoltraBleClient:
         )
 
     async def async_enter_isometric_mode(self) -> None:
+        self._isometric_vendor_refresh_until = 0.0
         await self._async_send_param_write(
             param_id=PARAM_FITNESS_WORKOUT_STATE,
             value=bytes((WORKOUT_STATE_ISOMETRIC,)),
@@ -425,10 +468,29 @@ class VoltraBleClient:
         if not self._state.can_load:
             raise VoltraApiError("; ".join(self._state.safety_reasons))
         if self._state.workout_state == WORKOUT_STATE_ISOMETRIC:
-            await self._async_send_param_write(
-                param_id=PARAM_BP_SET_FITNESS_MODE,
-                value=encode_uint16_le(FITNESS_MODE_STRENGTH_LOADED),
-                label="load Isometric Test",
+            self._extend_isometric_vendor_refresh_burst()
+            await self._async_write_frames(
+                [
+                    (
+                        "read Isometric cable position",
+                        build_param_read_frame(
+                            (PARAM_MC_DEFAULT_OFFLEN_CM, PARAM_BP_RUNTIME_POSITION_CM),
+                            self._next_sequence(),
+                        ),
+                    ),
+                    (
+                        "arm Isometric Test",
+                        build_param_write_frame(
+                            PARAM_BP_SET_FITNESS_MODE,
+                            encode_uint16_le(FITNESS_MODE_ISOMETRIC_ARMED),
+                            self._next_sequence(),
+                        ),
+                    ),
+                    (
+                        "refresh Isometric vendor state stream",
+                        build_vendor_state_refresh_frame(self._next_sequence()),
+                    ),
+                ],
             )
             return
         writes: list[tuple[str, int, bytes]] = []
@@ -442,6 +504,7 @@ class VoltraBleClient:
         await self._async_send_param_writes(writes)
 
     async def async_unload(self) -> None:
+        self._isometric_vendor_refresh_until = 0.0
         await self._async_send_param_write(
             param_id=PARAM_BP_SET_FITNESS_MODE,
             value=encode_uint16_le(FITNESS_MODE_STRENGTH_READY),
@@ -455,11 +518,7 @@ class VoltraBleClient:
                 await self._async_connect()
                 retry_delay = CONNECT_RETRY_BASE_DELAY_SECONDS
                 while not self._stop_event.is_set():
-                    interval = (
-                        PERIODIC_REFRESH_INTERVAL_SECONDS
-                        if self._state.protocol_validated
-                        else PROTOCOL_RETRY_INTERVAL_SECONDS
-                    )
+                    interval = self._background_refresh_interval()
                     try:
                         await asyncio.wait_for(self._disconnect_event.wait(), timeout=interval)
                         break
@@ -467,7 +526,10 @@ class VoltraBleClient:
                         if self._stop_event.is_set():
                             break
                         try:
-                            await self.async_refresh_status()
+                            if self._should_run_isometric_vendor_refresh():
+                                await self._async_send_isometric_vendor_refresh()
+                            else:
+                                await self.async_refresh_status()
                         except VoltraApiError as err:
                             _LOGGER.debug("VOLTRA refresh skipped: %s", err)
             except asyncio.CancelledError:
@@ -518,6 +580,9 @@ class VoltraBleClient:
         )
         client = await self._async_establish_connection(ble_device)
         self._client = client
+        self._command_characteristic = client.services.get_characteristic(
+            VOLTRA_COMMAND_CHARACTERISTIC_UUID,
+        )
         self._transport_characteristic = client.services.get_characteristic(
             VOLTRA_TRANSPORT_CHARACTERISTIC_UUID,
         )
@@ -599,25 +664,28 @@ class VoltraBleClient:
                     await asyncio.sleep(BOOTSTRAP_WRITE_PACING_SECONDS)
 
     async def _async_write_frame_locked(self, label: str, frame: bytes) -> None:
+        await self._async_write_frame_to_characteristic_locked(
+            label=label,
+            frame=frame,
+            characteristic=self._transport_characteristic or VOLTRA_TRANSPORT_CHARACTERISTIC_UUID,
+        )
+
+    async def _async_write_frame_to_characteristic_locked(
+        self,
+        *,
+        label: str,
+        frame: bytes,
+        characteristic: Any,
+        update_status: bool = True,
+    ) -> None:
         self._require_connected()
         assert self._client is not None
-        self._push_state(replace(self._state, status_message=f"Writing {label}."))
-        characteristic = self._transport_characteristic or VOLTRA_TRANSPORT_CHARACTERISTIC_UUID
-        properties = {
-            str(prop).lower()
-            for prop in getattr(characteristic, "properties", [])
-        }
-        response = (
-            True
-            if "write" in properties
-            else False
-            if "write-without-response" in properties or "write_no_response" in properties
-            else True
-        )
+        if update_status:
+            self._push_state(replace(self._state, status_message=f"Writing {label}."))
         await self._client.write_gatt_char(
             characteristic,
             frame,
-            response=response,
+            response=self._characteristic_supports_response(characteristic),
         )
 
     def _notification_handler(
@@ -673,7 +741,9 @@ class VoltraBleClient:
     async def _async_disconnect_internal(self) -> None:
         client = self._client
         self._client = None
+        self._command_characteristic = None
         self._transport_characteristic = None
+        self._isometric_vendor_refresh_until = 0.0
         self._assemblers.clear()
         if client is None:
             return
@@ -690,6 +760,58 @@ class VoltraBleClient:
         sequence = self._sequence
         self._sequence = (self._sequence + 1) & 0xFFFF
         return sequence
+
+    def _background_refresh_interval(self) -> float:
+        if self._should_run_isometric_vendor_refresh():
+            return ISOMETRIC_VENDOR_REFRESH_INTERVAL_SECONDS
+        return (
+            PERIODIC_REFRESH_INTERVAL_SECONDS
+            if self._state.protocol_validated
+            else PROTOCOL_RETRY_INTERVAL_SECONDS
+        )
+
+    def _should_run_isometric_vendor_refresh(self) -> bool:
+        return (
+            self._state.connected
+            and self._state.protocol_validated
+            and self._state.workout_state == WORKOUT_STATE_ISOMETRIC
+            and (
+                time.monotonic() < self._isometric_vendor_refresh_until
+                or self._state.load_engaged is True
+                or self._state.isometric_current_force_n is not None
+                or self._state.fitness_mode == FITNESS_MODE_TEST_SCREEN
+            )
+        )
+
+    def _extend_isometric_vendor_refresh_burst(self, duration: float = ISOMETRIC_VENDOR_REFRESH_BURST_SECONDS) -> None:
+        self._isometric_vendor_refresh_until = max(
+            self._isometric_vendor_refresh_until,
+            time.monotonic() + duration,
+        )
+
+    async def _async_send_isometric_vendor_refresh(self) -> None:
+        self._require_connected()
+        async with self._write_lock:
+            await self._async_write_frame_to_characteristic_locked(
+                label="refresh Isometric vendor state stream",
+                frame=build_vendor_state_refresh_frame(self._next_sequence()),
+                characteristic=self._transport_characteristic or VOLTRA_TRANSPORT_CHARACTERISTIC_UUID,
+                update_status=False,
+            )
+
+    @staticmethod
+    def _characteristic_supports_response(characteristic: Any) -> bool:
+        properties = {
+            str(prop).lower()
+            for prop in getattr(characteristic, "properties", [])
+        }
+        return (
+            True
+            if "write" in properties
+            else False
+            if "write-without-response" in properties or "write_no_response" in properties
+            else True
+        )
 
     def _build_chunked_param_read_frames(
         self,

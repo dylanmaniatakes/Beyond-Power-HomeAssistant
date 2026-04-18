@@ -13,6 +13,7 @@ PLATFORMS: list[Platform] = [
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.TEXT,
 ]
 
 VOLTRA_SERVICE_UUID = "e4dada34-0867-8783-9f70-2ca29216c7e4"
