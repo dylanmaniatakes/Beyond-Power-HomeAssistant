@@ -352,6 +352,18 @@ views:
                   name: Peak force
                   vertical: false
                 - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_rfd_0_100_ms
+                  name: RFD 0-100 ms
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_time_to_peak
+                  name: Time to peak
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_isometric_impulse_0_100_ms
+                  name: Impulse 0-100 ms
+                  vertical: false
+                - type: tile
                   entity: sensor.beyond_power_voltra_isometric_peak_relative_force
                   name: Peak relative
                   vertical: false

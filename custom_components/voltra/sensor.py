@@ -52,7 +52,7 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
     VoltraSensorDescription(
         key="cable_length",
         name="Cable length",
-        icon="mdi:ruler",
+        device_class=SensorDeviceClass.DISTANCE,
         native_unit_of_measurement="cm",
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda state: state.cable_length_cm,
@@ -94,6 +94,34 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda state: state.isometric_peak_force_n,
         available_fn=lambda state: state.workout_state == 8 or state.isometric_peak_force_n is not None,
+    ),
+    VoltraSensorDescription(
+        key="isometric_rfd_0_100_ms",
+        name="Isometric RFD 0-100 ms",
+        icon="mdi:chart-timeline-variant",
+        native_unit_of_measurement="N/s",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.isometric_rfd_100_n_per_s,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_rfd_100_n_per_s is not None,
+    ),
+    VoltraSensorDescription(
+        key="isometric_time_to_peak",
+        name="Isometric time to peak",
+        icon="mdi:timer-outline",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement="s",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: round(state.isometric_time_to_peak_millis / 1000, 2) if state.isometric_time_to_peak_millis is not None else None,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_time_to_peak_millis is not None,
+    ),
+    VoltraSensorDescription(
+        key="isometric_impulse_0_100_ms",
+        name="Isometric impulse 0-100 ms",
+        icon="mdi:pulse",
+        native_unit_of_measurement="N*s",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.isometric_impulse_100_n_seconds,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_impulse_100_n_seconds is not None,
     ),
     VoltraSensorDescription(
         key="isometric_peak_relative_force",
@@ -237,5 +265,7 @@ class VoltraSensor(VoltraEntity, SensorEntity):
         if self.entity_description.key == "isometric_waveform_samples":
             return {
                 "last_chunk_index": state.isometric_waveform_last_chunk_index,
+                "average_step_millis": state.isometric_waveform_average_step_millis,
+                "graph_max_force_n": state.isometric_graph_max_force_n,
             }
         return None

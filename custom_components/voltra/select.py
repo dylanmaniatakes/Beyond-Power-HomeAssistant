@@ -105,7 +105,7 @@ class VoltraSelectDescription(SelectEntityDescription):
 DESCRIPTIONS: tuple[VoltraSelectDescription, ...] = (
     VoltraSelectDescription(
         key="workout_mode",
-        name="Workout mode",
+        name="Mode",
         icon="mdi:arm-flex",
         options=WORKOUT_OPTIONS,
         current_option_fn=_current_workout_mode,
@@ -153,7 +153,7 @@ DESCRIPTIONS: tuple[VoltraSelectDescription, ...] = (
     ),
     VoltraSelectDescription(
         key="isokinetic_mode",
-        name="Eccentric mode",
+        name="Isokinetic mode",
         icon="mdi:swap-horizontal-bold",
         options=ISOKINETIC_OPTIONS,
         entity_category=EntityCategory.CONFIG,

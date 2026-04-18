@@ -76,6 +76,14 @@ def _primary_resistance_min(state: VoltraState) -> float:
     return 15 if _is_resistance_band(state) else 5
 
 
+def _primary_resistance_position_from_value(_: VoltraState, value: float) -> int:
+    return _value_to_position(value, 0, 200)
+
+
+def _primary_resistance_value_from_position(state: VoltraState, position: int) -> float:
+    return max(_primary_resistance_min(state), _position_to_value(position, 0, 200))
+
+
 def _value_to_position(value: float, minimum: float, maximum: float) -> int:
     if maximum <= minimum:
         return 0
@@ -97,6 +105,8 @@ class VoltraCoverDescription(CoverEntityDescription):
     available_fn: Callable[[VoltraState], bool] | None = None
     min_value_fn: Callable[[VoltraState], float] | None = None
     max_value_fn: Callable[[VoltraState], float] | None = None
+    position_from_value_fn: Callable[[VoltraState, float], int] | None = None
+    value_from_position_fn: Callable[[VoltraState, int], float] | None = None
 
 
 DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
@@ -111,6 +121,8 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
         unit="lb",
         available_fn=_is_primary_resistance_context,
         min_value_fn=_primary_resistance_min,
+        position_from_value_fn=_primary_resistance_position_from_value,
+        value_from_position_fn=_primary_resistance_value_from_position,
     ),
     VoltraCoverDescription(
         key="chains_cover",
@@ -270,16 +282,32 @@ class VoltraValueCover(VoltraControlEntity, CoverEntity):
             return self.entity_description.max_value
         return maximum_fn(self.coordinator.data)
 
-    @property
-    def current_cover_position(self) -> int | None:
-        value = self.entity_description.current_value_fn(self.coordinator.data)
-        if value is None:
-            return None
+    def _position_from_value(self, value: float) -> int:
+        mapper = self.entity_description.position_from_value_fn
+        if mapper is not None:
+            return mapper(self.coordinator.data, value)
         return _value_to_position(
             value,
             self._minimum_value(),
             self._maximum_value(),
         )
+
+    def _value_from_position(self, position: int) -> float:
+        mapper = self.entity_description.value_from_position_fn
+        if mapper is not None:
+            return mapper(self.coordinator.data, position)
+        return _position_to_value(
+            position,
+            self._minimum_value(),
+            self._maximum_value(),
+        )
+
+    @property
+    def current_cover_position(self) -> int | None:
+        value = self.entity_description.current_value_fn(self.coordinator.data)
+        if value is None:
+            return None
+        return self._position_from_value(value)
 
     @property
     def is_closed(self) -> bool | None:
@@ -291,12 +319,16 @@ class VoltraValueCover(VoltraControlEntity, CoverEntity):
     @property
     def extra_state_attributes(self) -> dict[str, object]:
         value = self.entity_description.current_value_fn(self.coordinator.data)
-        return {
+        attributes = {
             "native_value": value,
             "native_unit_of_measurement": self.entity_description.unit,
             "native_min_value": self._minimum_value(),
             "native_max_value": self._maximum_value(),
         }
+        if self.entity_description.position_from_value_fn is not None:
+            attributes["position_scale"] = "1 position point ~= 2 lb"
+            attributes["position_reference_max_value"] = 200
+        return attributes
 
     async def async_open_cover(self, **kwargs) -> None:
         await self.entity_description.set_value_fn(
@@ -312,9 +344,5 @@ class VoltraValueCover(VoltraControlEntity, CoverEntity):
 
     async def async_set_cover_position(self, **kwargs) -> None:
         position = kwargs[ATTR_POSITION]
-        native_value = _position_to_value(
-            position,
-            self._minimum_value(),
-            self._maximum_value(),
-        )
+        native_value = self._value_from_position(position)
         await self.entity_description.set_value_fn(self.coordinator, native_value)

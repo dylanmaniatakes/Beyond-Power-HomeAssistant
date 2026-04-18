@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
+from math import ceil
 import re
 
 from .models import VoltraState
@@ -172,6 +173,14 @@ LEGACY_ISOMETRIC_STREAM_VARIANTS = frozenset({1, 2, 3})
 TELEMETRY_ISOMETRIC_COARSE_LIVE_FORCE_RANGE_N = (1.0, MAX_REASONABLE_ISOMETRIC_FORCE_N)
 TELEMETRY_ISOMETRIC_WAVEFORM_MARKERS = frozenset({0xCC, 0x82, 0xA8})
 ISOMETRIC_VENDOR_REFRESH_PAYLOAD = bytes((0x13, 0x01))
+DEFAULT_ISOMETRIC_GRAPH_MAX_FORCE_N = 276.0
+ISOMETRIC_GRAPH_STEP_FORCE_N = 69.0
+ISOMETRIC_WINDOW_100MS = 100
+MIN_MEANINGFUL_ISOMETRIC_FORCE_N = 1.0
+SPARSE_PEAK_SPIKE_RATIO = 1.55
+SPARSE_PEAK_SPIKE_MIN_DELTA_N = 60.0
+SPARSE_PEAK_RETAIN_FACTOR = 0.35
+MAX_DENSE_ISOMETRIC_WAVEFORM_STEP_MILLIS = 25.0
 
 SERIAL_REGEX = re.compile(r"M?B[0-9A-Z]{10,}")
 FIRMWARE_REGEX = re.compile(r"(?:EP|BP|MainControlv|MotorControl|BMS|PMU)[0-9A-Za-z.-]*\d+\.\d+")
@@ -805,6 +814,7 @@ def apply_packet_to_state(
         fitness_mode=fitness_mode if fitness_mode is not None else current.fitness_mode,
         workout_state=workout_state if workout_state is not None else current.workout_state,
     )
+    next_state = _apply_isometric_computed_metrics(next_state)
     return compute_safety(next_state)
 
 
@@ -1125,6 +1135,243 @@ class IsometricTelemetry:
 class IsometricWaveform:
     samples_n: tuple[float, ...]
     last_chunk_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class IsometricForceSample:
+    elapsed_millis: int
+    force_n: float
+
+
+@dataclass(frozen=True, slots=True)
+class IsometricComputedMetrics:
+    peak_force_n: float | None
+    duration_millis: int | None
+    time_to_peak_millis: int | None
+    rfd_100_n_per_s: float | None
+    impulse_100_n_seconds: float | None
+    graph_max_force_n: float
+    waveform_average_step_millis: float | None
+
+
+def _apply_isometric_computed_metrics(state: VoltraState) -> VoltraState:
+    samples = _build_isometric_force_samples(state)
+    metrics = _compute_isometric_metrics(samples)
+    return replace(
+        state,
+        isometric_time_to_peak_millis=metrics.time_to_peak_millis,
+        isometric_rfd_100_n_per_s=metrics.rfd_100_n_per_s,
+        isometric_impulse_100_n_seconds=metrics.impulse_100_n_seconds,
+        isometric_graph_max_force_n=metrics.graph_max_force_n,
+        isometric_waveform_average_step_millis=metrics.waveform_average_step_millis,
+    )
+
+
+def _build_isometric_force_samples(state: VoltraState) -> list[IsometricForceSample]:
+    samples: list[IsometricForceSample] = []
+    waveform_samples = state.isometric_waveform_samples_n
+    if waveform_samples:
+        effective_duration_millis = (
+            state.isometric_elapsed_millis
+            if state.isometric_elapsed_millis is not None and state.isometric_elapsed_millis > 0
+            else None
+        )
+        if len(waveform_samples) > 1 and effective_duration_millis is not None:
+            step_millis = effective_duration_millis / (len(waveform_samples) - 1)
+        else:
+            step_millis = 4.0
+        for index, force_n in enumerate(waveform_samples):
+            samples.append(
+                IsometricForceSample(
+                    elapsed_millis=round(index * step_millis),
+                    force_n=max(force_n, 0.0),
+                ),
+            )
+
+    if state.load_engaged and state.isometric_current_force_n is not None and state.isometric_elapsed_millis is not None:
+        next_sample = IsometricForceSample(
+            elapsed_millis=state.isometric_elapsed_millis,
+            force_n=max(state.isometric_current_force_n, 0.0),
+        )
+        if not samples:
+            samples.append(next_sample)
+        elif next_sample.elapsed_millis < samples[-1].elapsed_millis:
+            samples = [next_sample]
+        elif next_sample.elapsed_millis == samples[-1].elapsed_millis:
+            samples[-1] = next_sample
+        else:
+            samples.append(next_sample)
+    return samples
+
+
+def _compute_isometric_metrics(samples: list[IsometricForceSample]) -> IsometricComputedMetrics:
+    if not samples:
+        return IsometricComputedMetrics(
+            peak_force_n=None,
+            duration_millis=None,
+            time_to_peak_millis=None,
+            rfd_100_n_per_s=None,
+            impulse_100_n_seconds=None,
+            graph_max_force_n=DEFAULT_ISOMETRIC_GRAPH_MAX_FORCE_N,
+            waveform_average_step_millis=None,
+        )
+
+    ordered: list[IsometricForceSample] = []
+    for sample in sorted(samples, key=lambda item: item.elapsed_millis):
+        if ordered and ordered[-1].elapsed_millis == sample.elapsed_millis:
+            ordered[-1] = sample
+        else:
+            ordered.append(sample)
+
+    offset = ordered[0].elapsed_millis
+    normalized = [
+        IsometricForceSample(
+            elapsed_millis=max(0, sample.elapsed_millis - offset),
+            force_n=max(sample.force_n, 0.0),
+        )
+        for sample in ordered
+    ]
+
+    current_sample = normalized[-1]
+    raw_peak = max(normalized, key=lambda item: item.force_n, default=None)
+    peak_sample = _adjust_sparse_peak_sample(normalized, raw_peak) if raw_peak is not None else None
+    graph_max_force_n = _compute_graph_max_force_n(normalized)
+    waveform_average_step_millis = (
+        sum(
+            max(0, current.elapsed_millis - previous.elapsed_millis)
+            for previous, current in zip(normalized, normalized[1:], strict=False)
+        ) / (len(normalized) - 1)
+        if len(normalized) > 1
+        else None
+    )
+    has_dense_waveform = (
+        waveform_average_step_millis is not None
+        and waveform_average_step_millis <= MAX_DENSE_ISOMETRIC_WAVEFORM_STEP_MILLIS
+    )
+
+    if peak_sample is None or peak_sample.force_n < MIN_MEANINGFUL_ISOMETRIC_FORCE_N:
+        return IsometricComputedMetrics(
+            peak_force_n=peak_sample.force_n if peak_sample is not None else None,
+            duration_millis=current_sample.elapsed_millis,
+            time_to_peak_millis=None,
+            rfd_100_n_per_s=None,
+            impulse_100_n_seconds=None,
+            graph_max_force_n=graph_max_force_n,
+            waveform_average_step_millis=waveform_average_step_millis,
+        )
+
+    duration_millis = current_sample.elapsed_millis
+    time_to_peak_millis = peak_sample.elapsed_millis if has_dense_waveform else None
+    if has_dense_waveform and duration_millis >= ISOMETRIC_WINDOW_100MS and len(normalized) >= 2:
+        start_force_n = normalized[0].force_n
+        force_at_100_n = _interpolate_isometric_force_at(normalized, ISOMETRIC_WINDOW_100MS)
+        rfd_100_n_per_s = max(0.0, (force_at_100_n - start_force_n) / 0.1)
+        impulse_100_n_seconds = max(
+            0.0,
+            _integrate_isometric_force_until(normalized, ISOMETRIC_WINDOW_100MS) / 1000.0,
+        )
+    else:
+        rfd_100_n_per_s = None
+        impulse_100_n_seconds = None
+
+    return IsometricComputedMetrics(
+        peak_force_n=peak_sample.force_n,
+        duration_millis=duration_millis,
+        time_to_peak_millis=time_to_peak_millis,
+        rfd_100_n_per_s=rfd_100_n_per_s,
+        impulse_100_n_seconds=impulse_100_n_seconds,
+        graph_max_force_n=graph_max_force_n,
+        waveform_average_step_millis=waveform_average_step_millis,
+    )
+
+
+def _adjust_sparse_peak_sample(
+    samples: list[IsometricForceSample],
+    raw_peak: IsometricForceSample,
+) -> IsometricForceSample:
+    if len(samples) not in range(4, 9):
+        return raw_peak
+    peak_index = next(
+        (
+            index
+            for index, sample in enumerate(samples)
+            if sample.elapsed_millis == raw_peak.elapsed_millis and sample.force_n == raw_peak.force_n
+        ),
+        -1,
+    )
+    if peak_index <= 0 or peak_index >= len(samples) - 1:
+        return raw_peak
+
+    previous_sample = samples[peak_index - 1]
+    next_sample = samples[peak_index + 1]
+    neighbor_max_force_n = max(previous_sample.force_n, next_sample.force_n)
+    neighbor_min_force_n = min(previous_sample.force_n, next_sample.force_n)
+    isolated_spike = (
+        raw_peak.force_n >= neighbor_max_force_n * SPARSE_PEAK_SPIKE_RATIO
+        and (raw_peak.force_n - neighbor_min_force_n) >= SPARSE_PEAK_SPIKE_MIN_DELTA_N
+    )
+    if not isolated_spike:
+        return raw_peak
+
+    adjusted_force_n = neighbor_max_force_n + (
+        (raw_peak.force_n - neighbor_max_force_n) * SPARSE_PEAK_RETAIN_FACTOR
+    )
+    return replace(raw_peak, force_n=adjusted_force_n)
+
+
+def _compute_graph_max_force_n(samples: list[IsometricForceSample]) -> float:
+    peak_force_n = max((sample.force_n for sample in samples), default=0.0)
+    if peak_force_n <= DEFAULT_ISOMETRIC_GRAPH_MAX_FORCE_N:
+        return DEFAULT_ISOMETRIC_GRAPH_MAX_FORCE_N
+    return ceil(peak_force_n / ISOMETRIC_GRAPH_STEP_FORCE_N) * ISOMETRIC_GRAPH_STEP_FORCE_N
+
+
+def _interpolate_isometric_force_at(
+    samples: list[IsometricForceSample],
+    target_millis: int,
+) -> float:
+    first_sample = samples[0]
+    if target_millis <= first_sample.elapsed_millis:
+        return first_sample.force_n
+    previous_sample = first_sample
+    for current_sample in samples[1:]:
+        if target_millis <= current_sample.elapsed_millis:
+            span_millis = max(1, current_sample.elapsed_millis - previous_sample.elapsed_millis)
+            progress = (target_millis - previous_sample.elapsed_millis) / span_millis
+            return previous_sample.force_n + (
+                (current_sample.force_n - previous_sample.force_n) * progress
+            )
+        previous_sample = current_sample
+    return samples[-1].force_n
+
+
+def _integrate_isometric_force_until(
+    samples: list[IsometricForceSample],
+    target_millis: int,
+) -> float:
+    if len(samples) < 2:
+        return 0.0
+    area_n_millis = 0.0
+    previous_sample = samples[0]
+    for current_sample in samples[1:]:
+        if target_millis <= previous_sample.elapsed_millis:
+            break
+        segment_end_millis = min(current_sample.elapsed_millis, target_millis)
+        if segment_end_millis > previous_sample.elapsed_millis:
+            end_force_n = (
+                current_sample.force_n
+                if segment_end_millis == current_sample.elapsed_millis
+                else _interpolate_isometric_force_at(
+                    [previous_sample, current_sample],
+                    segment_end_millis,
+                )
+            )
+            duration_millis = float(segment_end_millis - previous_sample.elapsed_millis)
+            area_n_millis += ((previous_sample.force_n + end_force_n) / 2.0) * duration_millis
+        if current_sample.elapsed_millis >= target_millis:
+            break
+        previous_sample = current_sample
+    return area_n_millis
 
 
 def _parse_rep_telemetry(packet: ParsedVoltraPacket) -> RepTelemetry | None:

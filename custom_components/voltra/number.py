@@ -3,7 +3,12 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
+from homeassistant.components.number import (
+    NumberDeviceClass,
+    NumberEntity,
+    NumberEntityDescription,
+    NumberMode,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -14,8 +19,9 @@ from .coordinator import VoltraCoordinator
 from .entity import VoltraControlEntity
 from .models import VoltraState
 
-def _is_primary_resistance_context(state: VoltraState) -> bool:
-    return state.workout_state in (None, 0, 1, 2)
+
+def _is_strength_context(state: VoltraState) -> bool:
+    return state.workout_state in (None, 0, 1)
 
 
 def _is_strength(state: VoltraState) -> bool:
@@ -54,51 +60,33 @@ def _ms_to_mms(value_ms: float) -> float:
     return round(value_ms * 1000)
 
 
-def _primary_resistance_value(state: VoltraState) -> float | None:
-    if _is_resistance_band(state):
-        return state.resistance_band_max_force_lb
-    return state.weight_lb
-
-
-async def _async_set_primary_resistance(coordinator: VoltraCoordinator, value: float) -> None:
-    if _is_resistance_band(coordinator.data):
-        await coordinator.client.async_set_resistance_band_force(value)
-        return
-    await coordinator.client.async_set_target_load(value)
-
-
-def _primary_resistance_min(state: VoltraState) -> float:
-    return 15 if _is_resistance_band(state) else 5
-
-
 @dataclass(frozen=True, kw_only=True)
 class VoltraNumberDescription(NumberEntityDescription):
     value_fn: Callable[[VoltraState], float | None]
     set_fn: Callable[[VoltraCoordinator, float], Awaitable[None]]
     available_fn: Callable[[VoltraState], bool] | None = None
-    min_value_fn: Callable[[VoltraState], float] | None = None
-    max_value_fn: Callable[[VoltraState], float] | None = None
 
 
 DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
     VoltraNumberDescription(
         key="target_load",
-        name="Resistance",
+        name="Weight",
         icon="mdi:dumbbell",
+        device_class=NumberDeviceClass.WEIGHT,
         native_min_value=5,
         native_max_value=200,
         native_step=1,
         native_unit_of_measurement="lb",
         mode=NumberMode.SLIDER,
-        value_fn=_primary_resistance_value,
-        set_fn=_async_set_primary_resistance,
-        available_fn=_is_primary_resistance_context,
-        min_value_fn=_primary_resistance_min,
+        value_fn=lambda state: state.weight_lb,
+        set_fn=lambda coordinator, value: coordinator.client.async_set_target_load(value),
+        available_fn=_is_strength_context,
     ),
     VoltraNumberDescription(
         key="chains_weight",
         name="Chains",
         icon="mdi:link-variant",
+        device_class=NumberDeviceClass.WEIGHT,
         native_min_value=0,
         native_max_value=200,
         native_step=1,
@@ -113,6 +101,7 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         key="eccentric_weight",
         name="Eccentric",
         icon="mdi:arrow-collapse-down",
+        device_class=NumberDeviceClass.WEIGHT,
         native_min_value=-200,
         native_max_value=200,
         native_step=1,
@@ -127,6 +116,7 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         key="resistance_band_force",
         name="Band force",
         icon="mdi:sine-wave",
+        device_class=NumberDeviceClass.WEIGHT,
         native_min_value=15,
         native_max_value=200,
         native_step=1,
@@ -141,6 +131,7 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         key="resistance_band_length",
         name="Band length",
         icon="mdi:ruler",
+        device_class=NumberDeviceClass.DISTANCE,
         native_min_value=20,
         native_max_value=102,
         native_step=1,
@@ -167,6 +158,7 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         key="isokinetic_target_speed",
         name="Target speed",
         icon="mdi:speedometer",
+        device_class=NumberDeviceClass.SPEED,
         native_min_value=0.10,
         native_max_value=2.0,
         native_step=0.05,
@@ -180,6 +172,7 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         key="isokinetic_speed_limit",
         name="Speed limit",
         icon="mdi:ray-end-arrow",
+        device_class=NumberDeviceClass.SPEED,
         native_min_value=0,
         native_max_value=2.0,
         native_step=0.05,
@@ -194,6 +187,7 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         key="isokinetic_constant_resistance",
         name="Constant resistance",
         icon="mdi:weight-pound",
+        device_class=NumberDeviceClass.WEIGHT,
         native_min_value=5,
         native_max_value=100,
         native_step=1,
@@ -208,6 +202,7 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         key="isokinetic_max_eccentric_load",
         name="Max eccentric load",
         icon="mdi:weight-pound",
+        device_class=NumberDeviceClass.WEIGHT,
         native_min_value=5,
         native_max_value=200,
         native_step=1,
@@ -222,6 +217,7 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         key="cable_offset",
         name="Cable offset",
         icon="mdi:camera-control",
+        device_class=NumberDeviceClass.DISTANCE,
         native_min_value=0,
         native_max_value=260,
         native_step=1,
@@ -256,20 +252,6 @@ class VoltraNumber(VoltraControlEntity, NumberEntity):
             return False
         predicate = self.entity_description.available_fn
         return predicate(self.coordinator.data) if predicate is not None else True
-
-    @property
-    def native_min_value(self) -> float:
-        minimum_fn = self.entity_description.min_value_fn
-        if minimum_fn is None:
-            return self.entity_description.native_min_value
-        return minimum_fn(self.coordinator.data)
-
-    @property
-    def native_max_value(self) -> float:
-        maximum_fn = self.entity_description.max_value_fn
-        if maximum_fn is None:
-            return self.entity_description.native_max_value
-        return maximum_fn(self.coordinator.data)
 
     @property
     def native_value(self) -> float | None:
