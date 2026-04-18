@@ -102,7 +102,7 @@ class VoltraCoverDescription(CoverEntityDescription):
 DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     VoltraCoverDescription(
         key="target_load_cover",
-        name="Resistance",
+        name="Resistance level",
         icon="mdi:dumbbell",
         current_value_fn=_primary_resistance_value,
         set_value_fn=_async_set_primary_resistance,
