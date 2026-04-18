@@ -19,9 +19,8 @@ from .coordinator import VoltraCoordinator
 from .entity import VoltraControlEntity
 from .models import VoltraState
 
-
-def _is_strength_context(state: VoltraState) -> bool:
-    return state.workout_state in (None, 0, 1)
+def _is_primary_resistance_context(state: VoltraState) -> bool:
+    return state.workout_state in (None, 0, 1, 2)
 
 
 def _is_strength(state: VoltraState) -> bool:
@@ -60,6 +59,23 @@ def _ms_to_mms(value_ms: float) -> float:
     return round(value_ms * 1000)
 
 
+def _primary_resistance_value(state: VoltraState) -> float | None:
+    if _is_resistance_band(state):
+        return state.resistance_band_max_force_lb
+    return state.weight_lb
+
+
+async def _async_set_primary_resistance(coordinator: VoltraCoordinator, value: float) -> None:
+    if _is_resistance_band(coordinator.data):
+        await coordinator.client.async_set_resistance_band_force(value)
+        return
+    await coordinator.client.async_set_target_load(value)
+
+
+def _primary_resistance_min(state: VoltraState) -> float:
+    return 15 if _is_resistance_band(state) else 5
+
+
 def _value_to_position(value: float, minimum: float, maximum: float) -> int:
     if maximum <= minimum:
         return 0
@@ -79,23 +95,26 @@ class VoltraCoverDescription(CoverEntityDescription):
     max_value: float
     unit: str
     available_fn: Callable[[VoltraState], bool] | None = None
+    min_value_fn: Callable[[VoltraState], float] | None = None
+    max_value_fn: Callable[[VoltraState], float] | None = None
 
 
 DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     VoltraCoverDescription(
         key="target_load_cover",
-        name="Weight position",
+        name="Resistance",
         icon="mdi:dumbbell",
-        current_value_fn=lambda state: state.weight_lb,
-        set_value_fn=lambda coordinator, value: coordinator.client.async_set_target_load(value),
+        current_value_fn=_primary_resistance_value,
+        set_value_fn=_async_set_primary_resistance,
         min_value=5,
         max_value=200,
         unit="lb",
-        available_fn=_is_strength_context,
+        available_fn=_is_primary_resistance_context,
+        min_value_fn=_primary_resistance_min,
     ),
     VoltraCoverDescription(
         key="chains_cover",
-        name="Chains position",
+        name="Chains",
         icon="mdi:link-variant",
         entity_category=EntityCategory.CONFIG,
         current_value_fn=lambda state: state.chains_weight_lb,
@@ -107,7 +126,7 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     ),
     VoltraCoverDescription(
         key="eccentric_cover",
-        name="Eccentric position",
+        name="Eccentric",
         icon="mdi:arrow-collapse-down",
         entity_category=EntityCategory.CONFIG,
         current_value_fn=lambda state: state.eccentric_weight_lb,
@@ -119,8 +138,9 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     ),
     VoltraCoverDescription(
         key="band_force_cover",
-        name="Band force position",
+        name="Band force",
         icon="mdi:sine-wave",
+        entity_category=EntityCategory.CONFIG,
         current_value_fn=lambda state: state.resistance_band_max_force_lb,
         set_value_fn=lambda coordinator, value: coordinator.client.async_set_resistance_band_force(value),
         min_value=15,
@@ -130,7 +150,7 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     ),
     VoltraCoverDescription(
         key="band_length_cover",
-        name="Band length position",
+        name="Band length",
         icon="mdi:ruler",
         entity_category=EntityCategory.CONFIG,
         current_value_fn=lambda state: _cm_to_inches(state.resistance_band_length_cm),
@@ -142,7 +162,7 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     ),
     VoltraCoverDescription(
         key="damper_cover",
-        name="Damper position",
+        name="Damper",
         icon="mdi:fan",
         current_value_fn=lambda state: float(state.damper_level_index + 1) if state.damper_level_index is not None else None,
         set_value_fn=lambda coordinator, value: coordinator.client.async_set_damper_level(value - 1),
@@ -153,7 +173,7 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     ),
     VoltraCoverDescription(
         key="target_speed_cover",
-        name="Target speed position",
+        name="Target speed",
         icon="mdi:speedometer",
         current_value_fn=lambda state: _mms_to_ms(state.isokinetic_target_speed_mms),
         set_value_fn=lambda coordinator, value: coordinator.client.async_set_isokinetic_target_speed(_ms_to_mms(value)),
@@ -164,7 +184,7 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     ),
     VoltraCoverDescription(
         key="speed_limit_cover",
-        name="Speed limit position",
+        name="Speed limit",
         icon="mdi:ray-end-arrow",
         entity_category=EntityCategory.CONFIG,
         current_value_fn=lambda state: _mms_to_ms(state.isokinetic_speed_limit_mms),
@@ -176,7 +196,7 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     ),
     VoltraCoverDescription(
         key="constant_resistance_cover",
-        name="Constant resistance position",
+        name="Constant resistance",
         icon="mdi:weight-pound",
         entity_category=EntityCategory.CONFIG,
         current_value_fn=lambda state: state.isokinetic_constant_resistance_lb,
@@ -188,7 +208,7 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     ),
     VoltraCoverDescription(
         key="max_eccentric_load_cover",
-        name="Max eccentric load position",
+        name="Max eccentric load",
         icon="mdi:weight-pound",
         entity_category=EntityCategory.CONFIG,
         current_value_fn=lambda state: state.isokinetic_max_eccentric_load_lb,
@@ -200,7 +220,7 @@ DESCRIPTIONS: tuple[VoltraCoverDescription, ...] = (
     ),
     VoltraCoverDescription(
         key="cable_offset_cover",
-        name="Cable offset position",
+        name="Cable offset",
         icon="mdi:camera-control",
         entity_category=EntityCategory.CONFIG,
         current_value_fn=lambda state: state.cable_offset_cm,
@@ -238,6 +258,18 @@ class VoltraValueCover(VoltraControlEntity, CoverEntity):
         predicate = self.entity_description.available_fn
         return predicate(self.coordinator.data) if predicate is not None else True
 
+    def _minimum_value(self) -> float:
+        minimum_fn = self.entity_description.min_value_fn
+        if minimum_fn is None:
+            return self.entity_description.min_value
+        return minimum_fn(self.coordinator.data)
+
+    def _maximum_value(self) -> float:
+        maximum_fn = self.entity_description.max_value_fn
+        if maximum_fn is None:
+            return self.entity_description.max_value
+        return maximum_fn(self.coordinator.data)
+
     @property
     def current_cover_position(self) -> int | None:
         value = self.entity_description.current_value_fn(self.coordinator.data)
@@ -245,8 +277,8 @@ class VoltraValueCover(VoltraControlEntity, CoverEntity):
             return None
         return _value_to_position(
             value,
-            self.entity_description.min_value,
-            self.entity_description.max_value,
+            self._minimum_value(),
+            self._maximum_value(),
         )
 
     @property
@@ -262,25 +294,27 @@ class VoltraValueCover(VoltraControlEntity, CoverEntity):
         return {
             "native_value": value,
             "native_unit_of_measurement": self.entity_description.unit,
+            "native_min_value": self._minimum_value(),
+            "native_max_value": self._maximum_value(),
         }
 
     async def async_open_cover(self, **kwargs) -> None:
         await self.entity_description.set_value_fn(
             self.coordinator,
-            self.entity_description.max_value,
+            self._maximum_value(),
         )
 
     async def async_close_cover(self, **kwargs) -> None:
         await self.entity_description.set_value_fn(
             self.coordinator,
-            self.entity_description.min_value,
+            self._minimum_value(),
         )
 
     async def async_set_cover_position(self, **kwargs) -> None:
         position = kwargs[ATTR_POSITION]
         native_value = _position_to_value(
             position,
-            self.entity_description.min_value,
-            self.entity_description.max_value,
+            self._minimum_value(),
+            self._maximum_value(),
         )
         await self.entity_description.set_value_fn(self.coordinator, native_value)
