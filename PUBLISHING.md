@@ -59,7 +59,7 @@ These are checked on GitHub itself and cannot be enforced from the files alone:
 
 ## Branding Note
 
-Home Assistant now supports local integration brand assets, and this repository includes them already. HACS documentation for default-store inclusion still references the `home-assistant/brands` check, so custom-repository use should be fine with the local `brand/` folder, but default-store submission may still require following whatever the current HACS/brands policy is at that time.
+Home Assistant now supports local integration brand assets, and this repository includes them inside the integration. To make HACS/custom-repository presentation more compatible too, this repo also carries matching repository-level `brand/` assets and root `icon.png` / `logo.png` copies. Default-store submission may still require following whatever the current HACS/brands policy is at that time.
 
 ## Brand Assets
 
@@ -69,3 +69,10 @@ This integration already includes local brand images for Home Assistant 2026.3+:
 - `custom_components/voltra/brand/logo.png`
 - `custom_components/voltra/brand/dark_icon.png`
 - `custom_components/voltra/brand/dark_logo.png`
+
+Repository-level brand copies are also included for HACS/repository presentation:
+
+- `brand/icon.png`
+- `brand/logo.png`
+- `icon.png`
+- `logo.png`

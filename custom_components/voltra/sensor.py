@@ -83,8 +83,8 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         icon="mdi:weight-pound",
         native_unit_of_measurement="N",
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda state: state.isometric_current_force_n,
-        available_fn=lambda state: state.workout_state == 8 or state.isometric_current_force_n is not None,
+        value_fn=lambda state: state.isometric_display_current_force_n,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_display_current_force_n is not None,
     ),
     VoltraSensorDescription(
         key="isometric_peak_force",
@@ -92,8 +92,8 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         icon="mdi:chart-line",
         native_unit_of_measurement="N",
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda state: state.isometric_peak_force_n,
-        available_fn=lambda state: state.workout_state == 8 or state.isometric_peak_force_n is not None,
+        value_fn=lambda state: state.isometric_display_peak_force_n,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_display_peak_force_n is not None,
     ),
     VoltraSensorDescription(
         key="isometric_rfd_0_100_ms",
@@ -129,8 +129,8 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         icon="mdi:percent",
         native_unit_of_measurement="%",
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda state: state.isometric_peak_relative_force_percent,
-        available_fn=lambda state: state.workout_state == 8 or state.isometric_peak_relative_force_percent is not None,
+        value_fn=lambda state: state.isometric_display_peak_relative_force_percent,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_display_peak_relative_force_percent is not None,
     ),
     VoltraSensorDescription(
         key="isometric_elapsed",
@@ -138,8 +138,8 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement="s",
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda state: round(state.isometric_elapsed_millis / 1000, 1) if state.isometric_elapsed_millis is not None else None,
-        available_fn=lambda state: state.workout_state == 8 or state.isometric_elapsed_millis is not None,
+        value_fn=lambda state: round(state.isometric_display_elapsed_millis / 1000, 1) if state.isometric_display_elapsed_millis is not None else None,
+        available_fn=lambda state: state.workout_state == 8 or state.isometric_display_elapsed_millis is not None,
     ),
     VoltraSensorDescription(
         key="isometric_max_force",

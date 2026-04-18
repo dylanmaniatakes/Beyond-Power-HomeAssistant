@@ -1145,6 +1145,7 @@ class IsometricForceSample:
 
 @dataclass(frozen=True, slots=True)
 class IsometricComputedMetrics:
+    current_force_n: float | None
     peak_force_n: float | None
     duration_millis: int | None
     time_to_peak_millis: int | None
@@ -1157,8 +1158,49 @@ class IsometricComputedMetrics:
 def _apply_isometric_computed_metrics(state: VoltraState) -> VoltraState:
     samples = _build_isometric_force_samples(state)
     metrics = _compute_isometric_metrics(samples)
+    has_trace_metrics = len(samples) >= 2
+    has_waveform_trace = bool(samples)
+    prefer_completed_summary = (
+        state.isometric_current_force_n is None
+        and state.isometric_peak_relative_force_percent is not None
+        and state.isometric_peak_force_n is not None
+        and state.isometric_elapsed_millis is not None
+        and not has_trace_metrics
+    )
+    display_current_force_n = (
+        metrics.current_force_n
+        if state.load_engaged and has_trace_metrics
+        else state.isometric_current_force_n if state.load_engaged else None
+    )
+    display_peak_force_n = (
+        state.isometric_peak_force_n
+        if prefer_completed_summary
+        else (
+            metrics.peak_force_n or state.isometric_peak_force_n
+            if has_trace_metrics or has_waveform_trace
+            else state.isometric_peak_force_n or metrics.peak_force_n
+        )
+    )
+    display_elapsed_millis = (
+        state.isometric_elapsed_millis
+        if prefer_completed_summary
+        else (
+            metrics.duration_millis or state.isometric_elapsed_millis
+            if has_trace_metrics or has_waveform_trace
+            else state.isometric_elapsed_millis or metrics.duration_millis
+        )
+    )
+    display_peak_relative_force_percent = (
+        state.isometric_peak_relative_force_percent
+        if state.isometric_current_force_n is None
+        else None
+    )
     return replace(
         state,
+        isometric_display_current_force_n=display_current_force_n,
+        isometric_display_peak_force_n=display_peak_force_n,
+        isometric_display_peak_relative_force_percent=display_peak_relative_force_percent,
+        isometric_display_elapsed_millis=display_elapsed_millis,
         isometric_time_to_peak_millis=metrics.time_to_peak_millis,
         isometric_rfd_100_n_per_s=metrics.rfd_100_n_per_s,
         isometric_impulse_100_n_seconds=metrics.impulse_100_n_seconds,
@@ -1207,6 +1249,7 @@ def _build_isometric_force_samples(state: VoltraState) -> list[IsometricForceSam
 def _compute_isometric_metrics(samples: list[IsometricForceSample]) -> IsometricComputedMetrics:
     if not samples:
         return IsometricComputedMetrics(
+            current_force_n=None,
             peak_force_n=None,
             duration_millis=None,
             time_to_peak_millis=None,
@@ -1251,6 +1294,7 @@ def _compute_isometric_metrics(samples: list[IsometricForceSample]) -> Isometric
 
     if peak_sample is None or peak_sample.force_n < MIN_MEANINGFUL_ISOMETRIC_FORCE_N:
         return IsometricComputedMetrics(
+            current_force_n=current_sample.force_n,
             peak_force_n=peak_sample.force_n if peak_sample is not None else None,
             duration_millis=current_sample.elapsed_millis,
             time_to_peak_millis=None,
@@ -1275,6 +1319,7 @@ def _compute_isometric_metrics(samples: list[IsometricForceSample]) -> Isometric
         impulse_100_n_seconds = None
 
     return IsometricComputedMetrics(
+        current_force_n=current_sample.force_n,
         peak_force_n=peak_sample.force_n,
         duration_millis=duration_millis,
         time_to_peak_millis=time_to_peak_millis,

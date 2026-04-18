@@ -47,6 +47,10 @@ class VoltraState:
     isometric_peak_force_n: float | None = None
     isometric_peak_relative_force_percent: float | None = None
     isometric_elapsed_millis: int | None = None
+    isometric_display_current_force_n: float | None = None
+    isometric_display_peak_force_n: float | None = None
+    isometric_display_peak_relative_force_percent: float | None = None
+    isometric_display_elapsed_millis: int | None = None
     isometric_telemetry_tick: int | None = None
     isometric_telemetry_start_tick: int | None = None
     isometric_carrier_force_n: float | None = None
