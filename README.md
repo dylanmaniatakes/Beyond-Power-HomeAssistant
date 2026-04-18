@@ -16,7 +16,7 @@ It is built from the recovered protocol work already encoded in the Android app:
 
 - Home Assistant name: `Beyond Power Voltra`
 - Local brand assets: `custom_components/voltra/brand/icon.png` and `logo.png`
-- Source image: `AppIcons/Assets.xcassets/AppIcon.appiconset/1024.png` from the BeyondPower-Port workspace
+- Source image: square Beyond Power logo artwork used to generate the local brand assets
 
 ## What It Exposes
 
