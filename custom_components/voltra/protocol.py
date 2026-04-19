@@ -147,6 +147,7 @@ TELEMETRY_ISOMETRIC_COARSE_LIVE_FORCE_MARKER = 1
 TELEMETRY_ISOMETRIC_ARMED_MARKER = 10
 TELEMETRY_ISOMETRIC_COMPLETED_MARKER = 11
 TELEMETRY_ISOMETRIC_LIVE_FORCE_MARKER = 12
+TELEMETRY_ISOMETRIC_EXTENDED_LIVE_FORCE_MARKERS = range(12, 16)
 TELEMETRY_ISOMETRIC_SUMMARY_TYPE = 0x80
 TELEMETRY_ISOMETRIC_SUMMARY_LENGTH_MARKER = 0x25
 TELEMETRY_ISOMETRIC_SUMMARY_PEAK_FORCE_OFFSET = 23
@@ -163,9 +164,10 @@ MAX_REASONABLE_ISOMETRIC_FORCE_N = 2_000.0
 MAX_REASONABLE_ISOMETRIC_GRAPH_FORCE_N = 2_000.0
 MAX_REASONABLE_ISOMETRIC_STATUS_WORD = 0x0200
 MAX_REASONABLE_ISOMETRIC_AUX_WORD = 4_000
+MAX_SUMMARY_RECONCILIATION_SPARSE_SAMPLES = 16
 STALE_ISOMETRIC_SUMMARY_FORCE_TOLERANCE_N = 5.0
 STALE_ISOMETRIC_SUMMARY_ELAPSED_TOLERANCE_MILLIS = 250
-LEGACY_ISOMETRIC_PULL_FORCE_SCALE = 1.438
+LEGACY_ISOMETRIC_PULL_FORCE_SCALE = 0.44482216152605
 LEGACY_ISOMETRIC_COARSE_FORCE_SCALE = 1.067
 ISOMETRIC_WAVEFORM_HEADER_BYTES = 6
 MAX_ISOMETRIC_WAVEFORM_SAMPLES = 2_400
@@ -589,6 +591,37 @@ def apply_packet_to_state(
         and isometric_telemetry.current_force_n is None
         and isometric_telemetry.carrier_status_secondary == TELEMETRY_ISOMETRIC_COMPLETED_MARKER
     )
+    current_peak_force_for_summary_reconciliation = current.isometric_peak_force_n
+    summary_peak_force_for_reconciliation = (
+        isometric_telemetry.peak_force_n
+        if isometric_telemetry is not None
+        else None
+    )
+    should_rescale_sparse_waveform_to_summary = (
+        isometric_telemetry is not None
+        and isometric_telemetry.peak_relative_force_percent is not None
+        and isometric_telemetry.current_force_n is None
+        and current.isometric_current_force_n is None
+        and current_peak_force_for_summary_reconciliation is not None
+        and summary_peak_force_for_reconciliation is not None
+        and 1 <= len(current.isometric_waveform_samples_n) <= MAX_SUMMARY_RECONCILIATION_SPARSE_SAMPLES
+        and current_peak_force_for_summary_reconciliation
+        > summary_peak_force_for_reconciliation + STALE_ISOMETRIC_SUMMARY_FORCE_TOLERANCE_N
+    )
+    if (
+        should_rescale_sparse_waveform_to_summary
+        and current_peak_force_for_summary_reconciliation is not None
+        and summary_peak_force_for_reconciliation is not None
+        and current_peak_force_for_summary_reconciliation > 0.0
+        and summary_peak_force_for_reconciliation > 0.0
+    ):
+        scale = summary_peak_force_for_reconciliation / current_peak_force_for_summary_reconciliation
+        rescaled_sparse_waveform_samples = tuple(
+            max(sample * scale, 0.0)
+            for sample in current.isometric_waveform_samples_n
+        )
+    else:
+        rescaled_sparse_waveform_samples = current.isometric_waveform_samples_n
 
     if entering_fresh_isometric_screen:
         isometric_waveform_samples_n: tuple[float, ...] = ()
@@ -607,6 +640,8 @@ def apply_packet_to_state(
         isometric_waveform_samples_n = (
             base_samples + (isometric_telemetry.current_force_n,)
         )[-MAX_ISOMETRIC_WAVEFORM_SAMPLES:]
+    elif should_rescale_sparse_waveform_to_summary:
+        isometric_waveform_samples_n = rescaled_sparse_waveform_samples
     else:
         isometric_waveform_samples_n = current.isometric_waveform_samples_n
 
@@ -960,14 +995,18 @@ def is_isometric_screen_mode(mode: int | None) -> bool:
 def is_load_engaged_for_workout_state(mode: int | None, workout_state: int | None) -> bool:
     if workout_state == WORKOUT_STATE_ISOMETRIC:
         normalized = normalized_fitness_mode(mode)
-        return normalized in (FITNESS_MODE_ISOMETRIC_ARMED, FITNESS_MODE_STRENGTH_LOADED)
+        return normalized in (
+            FITNESS_MODE_ISOMETRIC_ARMED,
+            FITNESS_MODE_STRENGTH_LOADED,
+            FITNESS_MODE_TEST_SCREEN,
+        )
     return is_loaded_fitness_mode(mode)
 
 
 def is_ready_for_workout_state(mode: int | None, workout_state: int | None) -> bool:
     normalized = normalized_fitness_mode(mode)
     if workout_state == WORKOUT_STATE_ISOMETRIC:
-        return normalized == FITNESS_MODE_STRENGTH_READY or is_isometric_screen_mode(mode)
+        return normalized == FITNESS_MODE_STRENGTH_READY
     return normalized == FITNESS_MODE_STRENGTH_READY
 
 
@@ -1169,8 +1208,8 @@ def _apply_isometric_computed_metrics(state: VoltraState) -> VoltraState:
     )
     display_current_force_n = (
         metrics.current_force_n
-        if state.load_engaged and has_trace_metrics
-        else state.isometric_current_force_n if state.load_engaged else None
+        if state.isometric_current_force_n is not None and has_trace_metrics
+        else state.isometric_current_force_n
     )
     display_peak_force_n = (
         state.isometric_peak_force_n
@@ -1507,14 +1546,14 @@ def _parse_legacy_isometric_telemetry(
     status_secondary = _u16le(payload, TELEMETRY_ISOMETRIC_STATUS_SECONDARY_OFFSET)
     raw_carrier_force_n = (_u16le(payload, TELEMETRY_ISOMETRIC_FORCE_OFFSET) / 10.0) * LEGACY_ISOMETRIC_COARSE_FORCE_SCALE
 
-    if status_secondary == TELEMETRY_ISOMETRIC_LIVE_FORCE_MARKER:
+    if status_secondary in TELEMETRY_ISOMETRIC_EXTENDED_LIVE_FORCE_MARKERS:
         current_force_n = status_primary * LEGACY_ISOMETRIC_PULL_FORCE_SCALE
         if not 0.0 <= current_force_n <= MAX_REASONABLE_ISOMETRIC_FORCE_N:
             return None
         starting_new_attempt = (
             current.isometric_current_force_n is None
             or current.isometric_telemetry_start_tick is None
-            or current.isometric_carrier_status_secondary != TELEMETRY_ISOMETRIC_LIVE_FORCE_MARKER
+            or current.isometric_carrier_status_secondary not in TELEMETRY_ISOMETRIC_EXTENDED_LIVE_FORCE_MARKERS
         )
         start_tick = tick if starting_new_attempt else current.isometric_telemetry_start_tick or tick
         elapsed_millis = max(0, tick - start_tick)
@@ -1633,6 +1672,12 @@ def _parse_isometric_summary_telemetry(
 
     peak_force_n = peak_force_tenths_n / 10.0
     elapsed_millis = duration_seconds * 1_000
+    summary_should_override_sparse_carrier_trace = (
+        current.isometric_current_force_n is None
+        and current.isometric_peak_relative_force_percent is None
+        and 1 <= len(current.isometric_waveform_samples_n) <= MAX_SUMMARY_RECONCILIATION_SPARSE_SAMPLES
+        and current.isometric_carrier_status_secondary == TELEMETRY_ISOMETRIC_ARMED_MARKER
+    )
     summary_looks_stale = (
         current.isometric_peak_force_n is not None
         and peak_force_n + STALE_ISOMETRIC_SUMMARY_FORCE_TOLERANCE_N < current.isometric_peak_force_n
@@ -1640,7 +1685,7 @@ def _parse_isometric_summary_telemetry(
         current.isometric_elapsed_millis is not None
         and elapsed_millis + STALE_ISOMETRIC_SUMMARY_ELAPSED_TOLERANCE_MILLIS < current.isometric_elapsed_millis
     )
-    if summary_looks_stale:
+    if summary_looks_stale and not summary_should_override_sparse_carrier_trace:
         return None
 
     return IsometricTelemetry(

@@ -23,7 +23,6 @@ from .const import (
     CONNECT_RETRY_BASE_DELAY_SECONDS,
     CONNECT_RETRY_MAX_DELAY_SECONDS,
     NOTIFY_CHARACTERISTIC_UUIDS,
-    PERIODIC_REFRESH_INTERVAL_SECONDS,
     PROTOCOL_RETRY_INTERVAL_SECONDS,
     VOLTRA_COMMAND_CHARACTERISTIC_UUID,
     VOLTRA_TRANSPORT_CHARACTERISTIC_UUID,
@@ -31,7 +30,6 @@ from .const import (
 from .models import VoltraState
 from .protocol import (
     AUTO_ISOKINETIC_SPEED_MMS,
-    BATTERY_STATUS_PARAMS,
     CMD_PARAM_READ,
     CMD_SET_DEVICE_NAME,
     FITNESS_MODE_ISOMETRIC_ARMED,
@@ -110,6 +108,7 @@ _LOGGER = logging.getLogger(__name__)
 PARAM_READ_FRAME_IDS_PER_CHUNK = 2
 ISOMETRIC_VENDOR_REFRESH_INTERVAL_SECONDS = 0.5
 ISOMETRIC_VENDOR_REFRESH_BURST_SECONDS = 3.0
+CONNECTED_IDLE_LOOP_INTERVAL_SECONDS = 1.0
 
 
 class VoltraApiError(HomeAssistantError):
@@ -528,10 +527,25 @@ class VoltraBleClient:
                         try:
                             if self._should_run_isometric_vendor_refresh():
                                 await self._async_send_isometric_vendor_refresh()
-                            else:
+                            elif not self._state.protocol_validated:
                                 await self.async_refresh_status()
                         except VoltraApiError as err:
                             _LOGGER.debug("VOLTRA refresh skipped: %s", err)
+                        except BleakError as err:
+                            if self._client is None or not self._client.is_connected or self._disconnect_event.is_set():
+                                raise
+                            _LOGGER.debug(
+                                "VOLTRA background exchange failed without disconnect for %s: %s",
+                                self._address,
+                                err,
+                            )
+                            self._push_state(
+                                replace(
+                                    self._state,
+                                    last_error=str(err),
+                                    status_message=f"VOLTRA background exchange failed: {err}",
+                                ),
+                            )
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001
@@ -764,11 +778,9 @@ class VoltraBleClient:
     def _background_refresh_interval(self) -> float:
         if self._should_run_isometric_vendor_refresh():
             return ISOMETRIC_VENDOR_REFRESH_INTERVAL_SECONDS
-        return (
-            PERIODIC_REFRESH_INTERVAL_SECONDS
-            if self._state.protocol_validated
-            else PROTOCOL_RETRY_INTERVAL_SECONDS
-        )
+        if self._state.protocol_validated:
+            return CONNECTED_IDLE_LOOP_INTERVAL_SECONDS
+        return PROTOCOL_RETRY_INTERVAL_SECONDS
 
     def _should_run_isometric_vendor_refresh(self) -> bool:
         return (
