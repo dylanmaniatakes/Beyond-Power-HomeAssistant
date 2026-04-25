@@ -81,6 +81,7 @@ from .protocol import (
     PARAM_BP_ECCENTRIC_WEIGHT,
     PARAM_BP_SET_FITNESS_MODE,
     PARAM_BP_RUNTIME_POSITION_CM,
+    PARAM_POWER_OFF_LOGO_EN,
     PARAM_EP_ISOKINETIC_TARGET_SPEED_MMS,
     PARAM_EP_RESISTANCE_BAND_INVERSE,
     PARAM_EP_SCR_SWITCH,
@@ -102,6 +103,8 @@ from .protocol import (
     PARAM_RESISTANCE_EXPERIENCE,
     ROWING_ONGOING_UI,
     ROWING_SCREEN_ID,
+    STARTUP_IMAGE_CHUNK_DATA_BYTES,
+    STARTUP_IMAGE_STATE_PARAMS,
     STATUS_REFRESH_PARAMS,
     WORKOUT_STATE_ACTIVE,
     WORKOUT_STATE_CUSTOM_CURVE,
@@ -125,13 +128,19 @@ from .protocol import (
     build_set_fitness_data_notify_subscribe_payload,
     build_set_rowing_resistance_level_payload,
     build_set_rowing_simulated_wear_level_payload,
+    build_startup_image_apply_payload,
+    build_startup_image_chunk_payload,
+    build_startup_image_finalize_payload,
+    build_startup_image_header_payload,
     build_trigger_row_start_screen_payload,
     build_vendor_state_refresh_frame,
     encode_int16_le,
     encode_uint16_le,
     encode_uint32_le,
     is_isokinetic_workout_state,
+    parse_startup_image_ack_code,
     rowing_selector_wire_index,
+    startup_image_frame_type,
 )
 
 if TYPE_CHECKING:
@@ -178,6 +187,7 @@ class VoltraBleClient:
         self._notification_queue: asyncio.Queue[tuple[int, str, bytes]] = asyncio.Queue()
         self._assemblers: dict[str, FrameAssembler] = {}
         self._isometric_vendor_refresh_until = 0.0
+        self._startup_image_poll_tasks: set[asyncio.Task[None]] = set()
         self._connection_epoch = 0
         self._sequence = 7
 
@@ -315,6 +325,89 @@ class VoltraBleClient:
                 status_message=f'Queued device rename to "{trimmed}".',
             ),
         )
+
+    async def async_upload_startup_image(self, jpeg_bytes: bytes) -> None:
+        self._require_connected()
+        if not jpeg_bytes:
+            raise VoltraApiError("Startup image is empty.")
+
+        chunks = [
+            jpeg_bytes[index : index + STARTUP_IMAGE_CHUNK_DATA_BYTES]
+            for index in range(0, len(jpeg_bytes), STARTUP_IMAGE_CHUNK_DATA_BYTES)
+        ]
+        if not chunks or len(chunks) > 0xFFFF:
+            raise VoltraApiError(f"Startup image chunk count is invalid: {len(chunks)}.")
+
+        self._cancel_startup_image_state_polls()
+        self._push_state(
+            replace(
+                self._state,
+                startup_image_upload_status="queued",
+                startup_image_upload_bytes=len(jpeg_bytes),
+                startup_image_upload_chunks_total=len(chunks),
+                startup_image_upload_chunks_acked=0,
+                startup_image_last_ack=None,
+                status_message=f"Queued startup image upload ({len(jpeg_bytes)} bytes, {len(chunks)} chunks).",
+            ),
+        )
+
+        frames: list[tuple[str, bytes, int | None]] = [
+            (
+                "enable startup image display",
+                build_param_write_frame(
+                    PARAM_POWER_OFF_LOGO_EN,
+                    bytes((0x01,)),
+                    self._next_sequence(),
+                ),
+                None,
+            ),
+            (
+                "startup image header",
+                build_frame(
+                    cmd=CMD_STARTUP_IMAGE,
+                    payload=build_startup_image_header_payload(jpeg_bytes, len(chunks)),
+                    seq=self._next_sequence(),
+                ),
+                None,
+            ),
+        ]
+        for index, chunk in enumerate(chunks, start=1):
+            payload = build_startup_image_chunk_payload(index, chunk)
+            frames.append(
+                (
+                    f"startup image chunk {index}/{len(chunks)}",
+                    build_frame(
+                        cmd=CMD_STARTUP_IMAGE,
+                        payload=payload,
+                        seq=self._next_sequence(),
+                        frame_type=startup_image_frame_type(payload),
+                    ),
+                    index,
+                ),
+            )
+        frames.extend(
+            [
+                (
+                    "startup image finalize",
+                    build_frame(
+                        cmd=CMD_STARTUP_IMAGE,
+                        payload=build_startup_image_finalize_payload(),
+                        seq=self._next_sequence(),
+                    ),
+                    None,
+                ),
+                (
+                    "startup image apply",
+                    build_frame(
+                        cmd=CMD_STARTUP_IMAGE,
+                        payload=build_startup_image_apply_payload(),
+                        seq=self._next_sequence(),
+                    ),
+                    None,
+                ),
+            ],
+        )
+        await self._async_write_startup_image_frames(frames, len(chunks))
 
     async def async_set_assist_mode(self, enabled: bool) -> None:
         self._require_strength_mode("change Assist mode")
@@ -1111,6 +1204,44 @@ class VoltraBleClient:
                 if index < len(frames) - 1:
                     await asyncio.sleep(BOOTSTRAP_WRITE_PACING_SECONDS)
 
+    async def _async_write_startup_image_frames(
+        self,
+        frames: list[tuple[str, bytes, int | None]],
+        chunk_count: int,
+    ) -> None:
+        self._require_connected()
+        async with self._write_lock:
+            for index, (label, frame, chunk_index) in enumerate(frames):
+                if chunk_index is None:
+                    status = f"Writing {label}."
+                elif chunk_index == 1 or chunk_index == chunk_count or chunk_index % 10 == 0:
+                    status = f"Writing startup image chunk {chunk_index}/{chunk_count}."
+                else:
+                    status = None
+                if status is not None:
+                    self._push_state(
+                        replace(
+                            self._state,
+                            startup_image_upload_status="uploading",
+                            status_message=status,
+                        ),
+                    )
+                await self._async_write_frame_to_characteristic_locked(
+                    label=label,
+                    frame=frame,
+                    characteristic=self._transport_characteristic or VOLTRA_TRANSPORT_CHARACTERISTIC_UUID,
+                    update_status=False,
+                )
+                if index < len(frames) - 1:
+                    await asyncio.sleep(BOOTSTRAP_WRITE_PACING_SECONDS)
+        self._push_state(
+            replace(
+                self._state,
+                startup_image_upload_status="sent",
+                status_message="Startup image upload sent. Waiting for VOLTRA apply acknowledgement.",
+            ),
+        )
+
     async def _async_write_frame_locked(self, label: str, frame: bytes) -> None:
         await self._async_write_frame_to_characteristic_locked(
             label=label,
@@ -1157,14 +1288,21 @@ class VoltraBleClient:
         assembler = self._assemblers.setdefault(characteristic_uuid, FrameAssembler())
         frames = assembler.accept(data)
         for frame in frames:
+            startup_image_ack_code = parse_startup_image_ack_code(frame)
             next_state = apply_packet_to_state(self._state, frame)
+            if startup_image_ack_code is not None:
+                next_state = self._apply_startup_image_ack(next_state, startup_image_ack_code)
             if characteristic_uuid in CONFIRMED_RESPONSE_CHARACTERISTIC_UUIDS and next_state != self._state:
                 next_state = replace(
                     next_state,
                     protocol_validated=True,
                     available=True,
                     connected=True,
-                    status_message="VOLTRA protocol validated.",
+                    status_message=(
+                        next_state.status_message
+                        if startup_image_ack_code is not None
+                        else "VOLTRA protocol validated."
+                    ),
                 )
             elif next_state != self._state:
                 next_state = replace(
@@ -1192,6 +1330,86 @@ class VoltraBleClient:
             ),
         )
 
+    def _apply_startup_image_ack(self, state: VoltraState, ack_code: int) -> VoltraState:
+        if ack_code == 0x03:
+            acked = (state.startup_image_upload_chunks_acked or 0) + 1
+            total = state.startup_image_upload_chunks_total
+            suffix = f"/{total}" if total is not None else ""
+            return replace(
+                state,
+                startup_image_upload_status="acknowledging",
+                startup_image_upload_chunks_acked=acked,
+                startup_image_last_ack="chunk",
+                status_message=f"VOLTRA acknowledged startup image chunk {acked}{suffix}.",
+            )
+        if ack_code == 0x04:
+            return replace(
+                state,
+                startup_image_upload_status="finalized",
+                startup_image_last_ack="finalize",
+                status_message="VOLTRA acknowledged startup image finalize.",
+            )
+        if ack_code == 0x05:
+            self._schedule_startup_image_post_apply_follow_up()
+            return replace(
+                state,
+                startup_image_upload_status="accepted",
+                startup_image_last_ack="apply",
+                status_message="VOLTRA accepted startup image transfer. Check the device for confirmation.",
+            )
+        return replace(
+            state,
+            startup_image_last_ack=f"0x{ack_code:02X}",
+            status_message=f"VOLTRA sent startup image acknowledgement 0x{ack_code:02X}.",
+        )
+
+    def _schedule_startup_image_post_apply_follow_up(self) -> None:
+        self._cancel_startup_image_state_polls()
+        self._track_startup_image_task(
+            self._async_startup_image_follow_up_write(
+                "ensure startup image display remains enabled",
+                build_param_write_frame(
+                    PARAM_POWER_OFF_LOGO_EN,
+                    bytes((0x01,)),
+                    self._next_sequence(),
+                ),
+            ),
+        )
+        for delay, label in (
+            (2.0, "read startup image state 2s after apply"),
+            (8.0, "read startup image state 8s after apply"),
+            (30.0, "read startup image state 30s after apply"),
+        ):
+            self._track_startup_image_task(self._async_delayed_startup_image_state_read(delay, label))
+
+    def _track_startup_image_task(self, coro) -> None:
+        task = self._hass.async_create_task(coro)
+        self._startup_image_poll_tasks.add(task)
+        task.add_done_callback(self._startup_image_poll_tasks.discard)
+
+    async def _async_startup_image_follow_up_write(self, label: str, frame: bytes) -> None:
+        try:
+            await self._async_write_frames([(label, frame)])
+        except (BleakError, VoltraApiError) as err:
+            _LOGGER.debug("VOLTRA startup image follow-up write skipped for %s: %s", self._address, err)
+
+    async def _async_delayed_startup_image_state_read(self, delay: float, label: str) -> None:
+        try:
+            await asyncio.sleep(delay)
+            await self._async_write_frames(
+                self._build_chunked_param_read_frames(
+                    STARTUP_IMAGE_STATE_PARAMS,
+                    label,
+                ),
+            )
+        except (BleakError, VoltraApiError) as err:
+            _LOGGER.debug("VOLTRA startup image state poll skipped for %s: %s", self._address, err)
+
+    def _cancel_startup_image_state_polls(self) -> None:
+        for task in tuple(self._startup_image_poll_tasks):
+            task.cancel()
+        self._startup_image_poll_tasks.clear()
+
     async def _async_disconnect_internal(self) -> None:
         client = self._client
         self._client = None
@@ -1199,6 +1417,7 @@ class VoltraBleClient:
         self._command_characteristic = None
         self._transport_characteristic = None
         self._isometric_vendor_refresh_until = 0.0
+        self._cancel_startup_image_state_polls()
         self._clear_notification_queue()
         self._assemblers.clear()
         if client is None:

@@ -87,6 +87,16 @@ class VoltraState:
     rowing_distance_samples_meters: tuple[float, ...] = field(default_factory=tuple)
     rowing_force_samples_lb: tuple[float, ...] = field(default_factory=tuple)
     rowing_force_last_chunk_index: int | None = None
+    startup_image_upload_status: str | None = None
+    startup_image_upload_bytes: int | None = None
+    startup_image_upload_chunks_total: int | None = None
+    startup_image_upload_chunks_acked: int | None = None
+    startup_image_last_ack: str | None = None
+    startup_image_power_off_logo_enabled: bool | None = None
+    startup_image_apply_action: int | None = None
+    startup_image_custom_logo_x: int | None = None
+    startup_image_custom_logo_y: int | None = None
+    startup_image_custom_logo_bg_color: int | None = None
     workout_peak_force_lb: float | None = None
     workout_peak_power_watts: int | None = None
     workout_time_to_peak_millis: int | None = None

@@ -314,6 +314,13 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         available_fn=lambda state: state.workout_state == 8 or state.isometric_carrier_status_secondary is not None,
     ),
     VoltraSensorDescription(
+        key="startup_image_upload",
+        name="Startup image upload",
+        icon="mdi:image-sync-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda state: state.startup_image_upload_status,
+    ),
+    VoltraSensorDescription(
         key="serial_number",
         name="Serial number",
         icon="mdi:identifier",
@@ -398,5 +405,17 @@ class VoltraSensor(VoltraEntity, SensorEntity):
                 "body_weight_n": state.isometric_body_weight_n,
                 "body_weight_100g": state.isometric_body_weight_100g,
                 "metrics_type": _isometric_metrics_type_label(state.isometric_metrics_type),
+            }
+        if self.entity_description.key == "startup_image_upload":
+            return {
+                "bytes": state.startup_image_upload_bytes,
+                "chunks_total": state.startup_image_upload_chunks_total,
+                "chunks_acked": state.startup_image_upload_chunks_acked,
+                "last_ack": state.startup_image_last_ack,
+                "power_off_logo_enabled": state.startup_image_power_off_logo_enabled,
+                "apply_action": state.startup_image_apply_action,
+                "custom_logo_x": state.startup_image_custom_logo_x,
+                "custom_logo_y": state.startup_image_custom_logo_y,
+                "custom_logo_bg_color": state.startup_image_custom_logo_bg_color,
             }
         return None

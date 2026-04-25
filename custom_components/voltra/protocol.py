@@ -21,12 +21,15 @@ CMD_FIRMWARE_INFO = 0x77
 CMD_DEVICE_STATE = 0xA7
 CMD_TELEMETRY = 0xAA
 CMD_ACTIVATION = 0xAB
+CMD_STARTUP_IMAGE = 0xAD
 CMD_BULK_PARAM_WRITE = 0xAF
 CMD_ISOMETRIC_STREAM = 0xB4
 
 APP_SENDER = 0xAA
 DEVICE_RECEIVER = 0x10
 PROTO = 0x0020
+FRAME_TYPE_APP_WRITE = 0x04
+FRAME_TYPE_EXTENDED_APP_WRITE = 0x05
 
 MIN_TARGET_LB = 5
 MAX_TARGET_LB = 200
@@ -63,6 +66,14 @@ MAX_CUSTOM_CURVE_RANGE_OF_MOTION_IN = 118
 DEFAULT_CUSTOM_CURVE_RANGE_OF_MOTION_IN = 117
 ROWING_SCREEN_ID = 0x3E
 ROWING_ONGOING_UI = 0x0303
+STARTUP_IMAGE_SIZE_PX = 720
+STARTUP_IMAGE_HEADER_FIXED_FLAGS = 0x0001
+STARTUP_IMAGE_HEADER_UNKNOWN_MARKER = 0xFFFF
+STARTUP_IMAGE_HEADER_COMPACT_TRAILER = 0x0000
+STARTUP_IMAGE_HEADER_CUSTOM_PHOTO_TRAILER = 0x0002
+STARTUP_IMAGE_CHUNK_DATA_BYTES = 464
+STARTUP_IMAGE_LARGE_CUSTOM_PHOTO_MIN_BYTES = 80_000
+STARTUP_IMAGE_LARGE_CUSTOM_PHOTO_MIN_CHUNKS = 200
 
 PARAM_BP_RUNTIME_POSITION_CM = 0x3E82
 PARAM_BP_RUNTIME_WIRE_WEIGHT_LBS = 0x3E83
@@ -76,6 +87,7 @@ PARAM_FITNESS_WORKOUT_STATE = 0x4FB0
 PARAM_APP_CUR_SCR_ID = 0x5011
 PARAM_FITNESS_DAMPER_RATIO_IDX = 0x5103
 PARAM_FITNESS_ASSIST_MODE = 0x5106
+PARAM_EP_LOGO_APPLY_ACTION = 0x51F8
 PARAM_EP_SCR_SWITCH = 0x5165
 PARAM_EP_FITNESS_DATA_NOTIFY_HZ = 0x5182
 PARAM_EP_FITNESS_DATA_NOTIFY_SUBSCRIBE = 0x5183
@@ -86,6 +98,7 @@ PARAM_EP_MAX_ALLOWED_FORCE = 0x5314
 PARAM_RESISTANCE_BAND_ALGORITHM = 0x5361
 PARAM_RESISTANCE_BAND_MAX_FORCE = 0x5362
 PARAM_FITNESS_ROWING_DAMPER_RATIO_IDX = 0x53A7
+PARAM_POWER_OFF_LOGO_EN = 0x53A6
 PARAM_EP_ROW_CHAIN_GEAR = 0x53AE
 PARAM_RESISTANCE_BAND_LEN_BY_ROM = 0x53B6
 PARAM_RESISTANCE_BAND_LEN = 0x53B7
@@ -104,6 +117,9 @@ PARAM_ISOMETRIC_MAX_FORCE = 0x5431
 PARAM_QUICK_CABLE_ADJUSTMENT = 0x54BC
 PARAM_MC_DEFAULT_OFFLEN_CM = 0x506A
 PARAM_FITNESS_ONGOING_UI = 0x5467
+PARAM_CUSTOM_LOGO_X = 0x5448
+PARAM_CUSTOM_LOGO_Y = 0x5449
+PARAM_CUSTOM_LOGO_BG_COLOR = 0x544A
 
 FITNESS_MODE_ISOMETRIC_ARMED = 0x0001
 FITNESS_MODE_STRENGTH_READY = 0x0004
@@ -161,6 +177,14 @@ MODE_FEATURE_STATUS_PARAMS: tuple[int, ...] = (
 BATTERY_STATUS_PARAMS: tuple[int, ...] = (
     PARAM_BMS_RSOC,
     PARAM_BMS_RSOC_LEGACY,
+)
+
+STARTUP_IMAGE_STATE_PARAMS: tuple[int, ...] = (
+    PARAM_EP_LOGO_APPLY_ACTION,
+    PARAM_POWER_OFF_LOGO_EN,
+    PARAM_CUSTOM_LOGO_X,
+    PARAM_CUSTOM_LOGO_Y,
+    PARAM_CUSTOM_LOGO_BG_COLOR,
 )
 
 STATUS_REFRESH_PARAMS: tuple[int, ...] = BATTERY_STATUS_PARAMS + MODE_FEATURE_STATUS_PARAMS
@@ -380,6 +404,11 @@ PARAM_REGISTRY: dict[int, ParamDefinition] = {
     PARAM_RESISTANCE_BAND_LEN: ParamDefinition(ParamType.UINT16, 2),
     PARAM_FITNESS_INVERSE_CHAIN: ParamDefinition(ParamType.UINT8, 1),
     PARAM_WEIGHT_TRAINING_EXTRA_MODE: ParamDefinition(ParamType.UINT8, 1),
+    PARAM_EP_LOGO_APPLY_ACTION: ParamDefinition(ParamType.UINT8, 1),
+    PARAM_POWER_OFF_LOGO_EN: ParamDefinition(ParamType.UINT8, 1),
+    PARAM_CUSTOM_LOGO_X: ParamDefinition(ParamType.UINT16, 2),
+    PARAM_CUSTOM_LOGO_Y: ParamDefinition(ParamType.UINT16, 2),
+    PARAM_CUSTOM_LOGO_BG_COLOR: ParamDefinition(ParamType.UINT32, 4),
     PARAM_ISOMETRIC_METRICS_TYPE: ParamDefinition(ParamType.UINT8, 1),
     PARAM_EP_ISOMETRIC_TESTING_BODY_WEIGHT_N: ParamDefinition(ParamType.UINT32, 4),
     PARAM_EP_ISOMETRIC_TESTING_BODY_WEIGHT_100G: ParamDefinition(ParamType.UINT16, 2),
@@ -456,16 +485,22 @@ def build_frame(
     sender: int = APP_SENDER,
     receiver: int = DEVICE_RECEIVER,
     proto: int = PROTO,
+    frame_type: int = FRAME_TYPE_APP_WRITE,
 ) -> bytes:
     length = 11 + len(payload) + 2
-    if length > 0xFF:
+    if length > 0xFFFF:
         raise ValueError(f"VOLTRA frame is too large: {length} bytes")
+    if length > 0xFF and frame_type != FRAME_TYPE_EXTENDED_APP_WRITE:
+        raise ValueError(f"VOLTRA frame needs extended type for {length} bytes")
+    if frame_type not in range(0x00, 0x100):
+        raise ValueError(f"VOLTRA frame type must fit in one byte: {frame_type}")
 
-    crc8_header = bytes((0x55, length, 0x04))
+    encoded_length = length & 0xFF
+    crc8_header = bytes((0x55, encoded_length, frame_type))
     body = bytearray(length - 2)
     body[0] = 0x55
-    body[1] = length
-    body[2] = 0x04
+    body[1] = encoded_length
+    body[2] = frame_type
     body[3] = crc8(crc8_header)
     body[4] = sender & 0xFF
     body[5] = receiver & 0xFF
@@ -509,6 +544,77 @@ def build_device_name_payload(name: str) -> bytes:
     if len(ascii_name) > DEVICE_NAME_MAX_BYTES:
         raise ValueError("Device name exceeds the VOLTRA payload size.")
     return ascii_name + bytes(DEVICE_NAME_MAX_BYTES - len(ascii_name))
+
+
+def build_startup_image_header_payload(
+    image_bytes: bytes,
+    chunk_count: int,
+    *,
+    width: int = STARTUP_IMAGE_SIZE_PX,
+    height: int = STARTUP_IMAGE_SIZE_PX,
+    trailer: int | None = None,
+) -> bytes:
+    if chunk_count not in range(1, 0x10000):
+        raise ValueError("Startup image chunk count must be between 1 and 65535.")
+    resolved_trailer = startup_image_header_trailer(image_bytes, chunk_count) if trailer is None else trailer
+    if resolved_trailer not in range(0, 0x10000):
+        raise ValueError("Startup image header trailer must fit uint16.")
+    return (
+        bytes((0x02, STARTUP_IMAGE_HEADER_FIXED_FLAGS))
+        + encode_uint16_le(STARTUP_IMAGE_HEADER_UNKNOWN_MARKER)
+        + encode_uint32_le(0)
+        + encode_uint16_le(width)
+        + encode_uint16_le(height)
+        + encode_uint32_le(0)
+        + encode_uint32_le(startup_image_fingerprint(image_bytes))
+        + encode_uint16_le(resolved_trailer)
+        + encode_uint16_le(chunk_count)
+    )
+
+
+def startup_image_header_trailer(image_bytes: bytes, chunk_count: int) -> int:
+    if chunk_count not in range(1, 0x10000):
+        raise ValueError("Startup image chunk count must be between 1 and 65535.")
+    if (
+        len(image_bytes) >= STARTUP_IMAGE_LARGE_CUSTOM_PHOTO_MIN_BYTES
+        or chunk_count >= STARTUP_IMAGE_LARGE_CUSTOM_PHOTO_MIN_CHUNKS
+    ):
+        return STARTUP_IMAGE_HEADER_CUSTOM_PHOTO_TRAILER
+    return STARTUP_IMAGE_HEADER_COMPACT_TRAILER
+
+
+def build_startup_image_chunk_payload(chunk_index: int, chunk_bytes: bytes) -> bytes:
+    if chunk_index not in range(1, 0x10000):
+        raise ValueError("Startup image chunk index must be between 1 and 65535.")
+    if not chunk_bytes:
+        raise ValueError("Startup image chunk cannot be empty.")
+    if len(chunk_bytes) > STARTUP_IMAGE_CHUNK_DATA_BYTES:
+        raise ValueError(f"Startup image chunk must be {STARTUP_IMAGE_CHUNK_DATA_BYTES} bytes or smaller.")
+    return bytes((0x03,)) + encode_uint16_le(chunk_index) + chunk_bytes
+
+
+def build_startup_image_finalize_payload() -> bytes:
+    return bytes((0x04,))
+
+
+def build_startup_image_apply_payload() -> bytes:
+    return bytes((0x05, 0x01))
+
+
+def startup_image_fingerprint(image_bytes: bytes) -> int:
+    return ((len(image_bytes) & 0xFFFF) << 16) | crc16(image_bytes)
+
+
+def startup_image_frame_type(payload: bytes) -> int:
+    total_length = 11 + len(payload) + 2
+    return FRAME_TYPE_EXTENDED_APP_WRITE if total_length > 0xFF else FRAME_TYPE_APP_WRITE
+
+
+def parse_startup_image_ack_code(frame: bytes) -> int | None:
+    packet = parse_packet(frame)
+    if packet is None or packet.command_id != CMD_STARTUP_IMAGE or len(packet.payload) < 2:
+        return None
+    return packet.payload[1]
 
 
 def build_vendor_state_refresh_frame(seq: int) -> bytes:
@@ -795,7 +901,7 @@ def expected_frame_length(header: bytes) -> int | None:
         return None
     declared_length = header[1]
     packet_type = header[2]
-    if packet_type == 0x09:
+    if packet_type in (FRAME_TYPE_EXTENDED_APP_WRITE, 0x09):
         return 0x100 + declared_length
     return declared_length
 
@@ -868,6 +974,11 @@ def apply_packet_to_state(
     weight_training_extra_mode = _get_uint8(params, PARAM_WEIGHT_TRAINING_EXTRA_MODE)
     app_current_screen_id = _get_uint8(params, PARAM_APP_CUR_SCR_ID)
     fitness_ongoing_ui = _get_uint16(params, PARAM_FITNESS_ONGOING_UI)
+    startup_image_apply_action = _get_uint8(params, PARAM_EP_LOGO_APPLY_ACTION)
+    startup_image_power_off_logo_enabled = _bool_from_uint8(_get_uint8(params, PARAM_POWER_OFF_LOGO_EN))
+    startup_image_custom_logo_x = _get_uint16(params, PARAM_CUSTOM_LOGO_X)
+    startup_image_custom_logo_y = _get_uint16(params, PARAM_CUSTOM_LOGO_Y)
+    startup_image_custom_logo_bg_color = _get_uint32(params, PARAM_CUSTOM_LOGO_BG_COLOR)
     max_allowed_force_lb = _get_uint16(params, PARAM_EP_MAX_ALLOWED_FORCE)
     isokinetic_mode = _get_uint8(params, PARAM_ISOKINETIC_ECC_MODE)
     isokinetic_target_speed_mms = _get_uint32(params, PARAM_EP_ISOKINETIC_TARGET_SPEED_MMS)
@@ -1262,6 +1373,31 @@ def apply_packet_to_state(
             None
             if leaving_rowing and fitness_ongoing_ui is None
             else fitness_ongoing_ui if fitness_ongoing_ui is not None else current.fitness_ongoing_ui
+        ),
+        startup_image_apply_action=(
+            startup_image_apply_action
+            if startup_image_apply_action is not None
+            else current.startup_image_apply_action
+        ),
+        startup_image_power_off_logo_enabled=(
+            startup_image_power_off_logo_enabled
+            if startup_image_power_off_logo_enabled is not None
+            else current.startup_image_power_off_logo_enabled
+        ),
+        startup_image_custom_logo_x=(
+            startup_image_custom_logo_x
+            if startup_image_custom_logo_x is not None
+            else current.startup_image_custom_logo_x
+        ),
+        startup_image_custom_logo_y=(
+            startup_image_custom_logo_y
+            if startup_image_custom_logo_y is not None
+            else current.startup_image_custom_logo_y
+        ),
+        startup_image_custom_logo_bg_color=(
+            startup_image_custom_logo_bg_color
+            if startup_image_custom_logo_bg_color is not None
+            else current.startup_image_custom_logo_bg_color
         ),
         custom_curve_resistance_min_lb=(
             base_weight_lb

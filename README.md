@@ -10,6 +10,7 @@ It is built from the recovered protocol work already encoded in the Android app:
 - the captured read-only bootstrap/handshake sequence
 - the recovered `0x55` frame format and CRC rules
 - confirmed parameter IDs for Weight Training, Resistance Band, Damper, and Isokinetic controls
+- the recovered startup-image media upload flow using the Android-style 720x720 JPEG path
 - live notification parsing for battery, reps, sets, cable length, load state, and other status
 
 ## Branding
@@ -29,6 +30,20 @@ The custom component creates a BLE-backed Beyond Power Voltra device with:
 - numbers for target load, band force/length, Damper level, cable offset, Weight Training settings, and Isokinetic settings
 - selects for workout mode, resistance settings, and the Isokinetic eccentric mode
 - buttons for refresh and cable-length adjustment mode
+- a service for uploading a custom startup/power-off image to the VOLTRA
+
+## Startup Image Upload
+
+Use the `voltra.upload_startup_image` service with an `image_path` on the Home Assistant host. By default, the integration center-crops and encodes the image as the same 720x720 JPEG style used by the Android app, then sends the `0xAD` header/chunk/finalize/apply transfer over BLE.
+
+Example service data:
+
+```yaml
+image_path: /config/www/voltra-startup.jpg
+prepare_image: true
+```
+
+If you have more than one Voltra configured, include the target `entry_id` field from the service UI.
 
 ## Safety Model
 
@@ -37,7 +52,7 @@ The integration intentionally mirrors the Android app's conservative behavior:
 - it must see a valid VOLTRA response frame before control entities become available
 - load uses the parsed safety state and will refuse to engage if the device does not look ready
 - only the command set already promoted in the Android notes is implemented
-- Custom Curve, OTA, and undocumented raw writes are intentionally excluded
+- OTA and undocumented raw writes are intentionally excluded
 
 ## Install
 

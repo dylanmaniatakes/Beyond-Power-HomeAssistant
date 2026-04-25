@@ -1,0 +1,24 @@
+upload_startup_image:
+  name: Upload startup image
+  description: Upload a custom power-off/startup image to the VOLTRA over Bluetooth.
+  fields:
+    entry_id:
+      name: Config entry
+      description: The Beyond Power Voltra config entry to target. Required only when more than one VOLTRA is configured.
+      required: false
+      selector:
+        config_entry:
+          integration: voltra
+    image_path:
+      name: Image path
+      description: Path to the image on the Home Assistant host. Relative paths are resolved under the Home Assistant config directory.
+      required: true
+      selector:
+        text:
+    prepare_image:
+      name: Prepare image
+      description: Center-crop and encode the image as the Android-style 720x720 JPEG before uploading.
+      required: false
+      default: true
+      selector:
+        boolean:
