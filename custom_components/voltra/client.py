@@ -171,11 +171,14 @@ class VoltraBleClient:
         self._command_characteristic: Any = None
         self._transport_characteristic: Any = None
         self._runner_task: asyncio.Task[None] | None = None
+        self._notification_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._disconnect_event = asyncio.Event()
         self._write_lock = asyncio.Lock()
+        self._notification_queue: asyncio.Queue[tuple[int, str, bytes]] = asyncio.Queue()
         self._assemblers: dict[str, FrameAssembler] = {}
         self._isometric_vendor_refresh_until = 0.0
+        self._connection_epoch = 0
         self._sequence = 7
 
     @property
@@ -186,6 +189,7 @@ class VoltraBleClient:
         if self._runner_task is not None:
             return
         self._stop_event.clear()
+        self._ensure_notification_processor()
         self._push_state(replace(self._state, status_message="Starting VOLTRA Bluetooth client."))
         self._runner_task = self._hass.async_create_task(self._run())
 
@@ -199,6 +203,7 @@ class VoltraBleClient:
                 pass
             self._runner_task = None
         await self._async_disconnect_internal()
+        await self._async_stop_notification_processor()
 
     async def async_refresh_status(self) -> None:
         self._require_connected()
@@ -996,6 +1001,7 @@ class VoltraBleClient:
 
     async def _async_connect(self) -> None:
         self._disconnect_event = asyncio.Event()
+        self._clear_notification_queue()
         ble_device = bluetooth.async_ble_device_from_address(
             self._hass,
             self._address,
@@ -1017,6 +1023,8 @@ class VoltraBleClient:
         )
         client = await self._async_establish_connection(ble_device)
         self._client = client
+        self._connection_epoch += 1
+        connection_epoch = self._connection_epoch
         self._command_characteristic = client.services.get_characteristic(
             VOLTRA_COMMAND_CHARACTERISTIC_UUID,
         )
@@ -1027,7 +1035,10 @@ class VoltraBleClient:
         for characteristic_uuid in NOTIFY_CHARACTERISTIC_UUIDS:
             try:
                 characteristic = client.services.get_characteristic(characteristic_uuid) or characteristic_uuid
-                await client.start_notify(characteristic, self._notification_handler)
+                await client.start_notify(
+                    characteristic,
+                    lambda c, d, epoch=connection_epoch: self._notification_handler(epoch, c, d),
+                )
             except BleakError as err:
                 _LOGGER.debug("VOLTRA start_notify failed for %s: %s", characteristic_uuid, err)
 
@@ -1127,13 +1138,19 @@ class VoltraBleClient:
 
     def _notification_handler(
         self,
+        connection_epoch: int,
         characteristic: BleakGATTCharacteristic,
         data: bytearray,
     ) -> None:
+        if self._stop_event.is_set():
+            return
         characteristic_uuid = str(characteristic.uuid).lower()
+        payload = bytes(data)
         self._hass.loop.call_soon_threadsafe(
-            self._hass.async_create_task,
-            self._async_process_notification(characteristic_uuid, bytes(data)),
+            self._enqueue_notification,
+            connection_epoch,
+            characteristic_uuid,
+            payload,
         )
 
     async def _async_process_notification(self, characteristic_uuid: str, data: bytes) -> None:
@@ -1178,9 +1195,11 @@ class VoltraBleClient:
     async def _async_disconnect_internal(self) -> None:
         client = self._client
         self._client = None
+        self._connection_epoch += 1
         self._command_characteristic = None
         self._transport_characteristic = None
         self._isometric_vendor_refresh_until = 0.0
+        self._clear_notification_queue()
         self._assemblers.clear()
         if client is None:
             return
@@ -1192,6 +1211,66 @@ class VoltraBleClient:
     def _push_state(self, state: VoltraState) -> None:
         self._state = state
         self._update_callback(state)
+
+    def _ensure_notification_processor(self) -> None:
+        if self._notification_task is None or self._notification_task.done():
+            self._notification_task = self._hass.async_create_task(self._async_notification_processor())
+
+    async def _async_stop_notification_processor(self) -> None:
+        task = self._notification_task
+        self._notification_task = None
+        self._clear_notification_queue()
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    def _enqueue_notification(
+        self,
+        connection_epoch: int,
+        characteristic_uuid: str,
+        payload: bytes,
+    ) -> None:
+        if self._stop_event.is_set():
+            return
+        self._notification_queue.put_nowait((connection_epoch, characteristic_uuid, payload))
+
+    def _clear_notification_queue(self) -> None:
+        while not self._notification_queue.empty():
+            try:
+                self._notification_queue.get_nowait()
+                self._notification_queue.task_done()
+            except asyncio.QueueEmpty:
+                break
+
+    async def _async_notification_processor(self) -> None:
+        while True:
+            connection_epoch, characteristic_uuid, payload = await self._notification_queue.get()
+            try:
+                if connection_epoch != self._connection_epoch:
+                    continue
+                await self._async_process_notification(characteristic_uuid, payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug(
+                    "VOLTRA notification processing failed for %s on %s: %s",
+                    self._address,
+                    characteristic_uuid,
+                    err,
+                )
+                self._push_state(
+                    replace(
+                        self._state,
+                        last_error=str(err),
+                        status_message=f"VOLTRA notification processing failed: {err}",
+                    ),
+                )
+            finally:
+                self._notification_queue.task_done()
 
     def _next_sequence(self) -> int:
         sequence = self._sequence
