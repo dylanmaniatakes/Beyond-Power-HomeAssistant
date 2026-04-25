@@ -32,8 +32,16 @@ def _is_resistance_band(state: VoltraState) -> bool:
     return state.workout_state == 2
 
 
+def _is_rowing(state: VoltraState) -> bool:
+    return state.workout_state == 3
+
+
 def _is_damper(state: VoltraState) -> bool:
     return state.workout_state == 4
+
+
+def _is_custom_curve(state: VoltraState) -> bool:
+    return state.workout_state == 6
 
 
 def _is_isokinetic(state: VoltraState) -> bool:
@@ -98,6 +106,100 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         available_fn=_is_strength,
     ),
     VoltraNumberDescription(
+        key="custom_curve_point_1",
+        name="Curve point 1",
+        icon="mdi:chart-line",
+        native_min_value=0,
+        native_max_value=100,
+        native_step=1,
+        native_unit_of_measurement="%",
+        mode=NumberMode.SLIDER,
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: round(state.custom_curve_points[0] * 100),
+        set_fn=lambda coordinator, value: coordinator.client.async_set_custom_curve_point(0, value),
+    ),
+    VoltraNumberDescription(
+        key="custom_curve_point_2",
+        name="Curve point 2",
+        icon="mdi:chart-line-variant",
+        native_min_value=0,
+        native_max_value=100,
+        native_step=1,
+        native_unit_of_measurement="%",
+        mode=NumberMode.SLIDER,
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: round(state.custom_curve_points[1] * 100),
+        set_fn=lambda coordinator, value: coordinator.client.async_set_custom_curve_point(1, value),
+    ),
+    VoltraNumberDescription(
+        key="custom_curve_point_3",
+        name="Curve point 3",
+        icon="mdi:chart-line-variant",
+        native_min_value=0,
+        native_max_value=100,
+        native_step=1,
+        native_unit_of_measurement="%",
+        mode=NumberMode.SLIDER,
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: round(state.custom_curve_points[2] * 100),
+        set_fn=lambda coordinator, value: coordinator.client.async_set_custom_curve_point(2, value),
+    ),
+    VoltraNumberDescription(
+        key="custom_curve_point_4",
+        name="Curve point 4",
+        icon="mdi:chart-line",
+        native_min_value=0,
+        native_max_value=100,
+        native_step=1,
+        native_unit_of_measurement="%",
+        mode=NumberMode.SLIDER,
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: round(state.custom_curve_points[3] * 100),
+        set_fn=lambda coordinator, value: coordinator.client.async_set_custom_curve_point(3, value),
+    ),
+    VoltraNumberDescription(
+        key="custom_curve_resistance_min",
+        name="Curve minimum",
+        icon="mdi:weight-pound",
+        device_class=NumberDeviceClass.WEIGHT,
+        native_min_value=5,
+        native_max_value=180,
+        native_step=1,
+        native_unit_of_measurement="lb",
+        mode=NumberMode.SLIDER,
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: state.custom_curve_resistance_min_lb,
+        set_fn=lambda coordinator, value: coordinator.client.async_set_custom_curve_resistance_min(value),
+    ),
+    VoltraNumberDescription(
+        key="custom_curve_resistance_limit",
+        name="Curve maximum",
+        icon="mdi:weight-pound",
+        device_class=NumberDeviceClass.WEIGHT,
+        native_min_value=25,
+        native_max_value=200,
+        native_step=1,
+        native_unit_of_measurement="lb",
+        mode=NumberMode.SLIDER,
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: state.custom_curve_resistance_limit_lb,
+        set_fn=lambda coordinator, value: coordinator.client.async_set_custom_curve_resistance_limit(value),
+    ),
+    VoltraNumberDescription(
+        key="custom_curve_range_of_motion",
+        name="Curve range of motion",
+        icon="mdi:ruler",
+        device_class=NumberDeviceClass.DISTANCE,
+        native_min_value=20,
+        native_max_value=118,
+        native_step=1,
+        native_unit_of_measurement="in",
+        mode=NumberMode.SLIDER,
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: state.custom_curve_range_of_motion_in,
+        set_fn=lambda coordinator, value: coordinator.client.async_set_custom_curve_range_of_motion(value),
+    ),
+    VoltraNumberDescription(
         key="eccentric_weight",
         name="Eccentric",
         icon="mdi:arrow-collapse-down",
@@ -141,6 +243,30 @@ DESCRIPTIONS: tuple[VoltraNumberDescription, ...] = (
         value_fn=lambda state: _cm_to_inches(state.resistance_band_length_cm),
         set_fn=lambda coordinator, value: coordinator.client.async_set_resistance_band_length(_inches_to_cm(value)),
         available_fn=lambda state: _is_resistance_band(state) and not bool(state.resistance_band_by_range_of_motion),
+    ),
+    VoltraNumberDescription(
+        key="rowing_resistance_level",
+        name="Row resistance",
+        icon="mdi:waves-arrow-right",
+        native_min_value=1,
+        native_max_value=10,
+        native_step=1,
+        mode=NumberMode.SLIDER,
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: float(state.rowing_resistance_level) if state.rowing_resistance_level is not None else None,
+        set_fn=lambda coordinator, value: coordinator.client.async_set_rowing_resistance_level(value),
+    ),
+    VoltraNumberDescription(
+        key="rowing_simulated_wear_level",
+        name="Row simulated wear",
+        icon="mdi:bike-fast",
+        native_min_value=1,
+        native_max_value=10,
+        native_step=1,
+        mode=NumberMode.SLIDER,
+        entity_category=EntityCategory.CONFIG,
+        value_fn=lambda state: float(state.rowing_simulated_wear_level) if state.rowing_simulated_wear_level is not None else None,
+        set_fn=lambda coordinator, value: coordinator.client.async_set_rowing_simulated_wear_level(value),
     ),
     VoltraNumberDescription(
         key="damper_level",

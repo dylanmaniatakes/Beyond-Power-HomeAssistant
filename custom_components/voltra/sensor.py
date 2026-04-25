@@ -18,12 +18,27 @@ from .const import DOMAIN
 from .coordinator import VoltraCoordinator
 from .entity import VoltraEntity
 from .models import VoltraState
+from .protocol import WORKOUT_STATE_DAMPER, WORKOUT_STATE_ISOKINETIC, WORKOUT_STATE_ISOMETRIC
 
 
 @dataclass(frozen=True, kw_only=True)
 class VoltraSensorDescription(SensorEntityDescription):
     value_fn: Callable[[VoltraState], str | int | float | None]
     available_fn: Callable[[VoltraState], bool] | None = None
+
+
+def _is_power_workout(state: VoltraState) -> bool:
+    return state.workout_state in (WORKOUT_STATE_DAMPER, WORKOUT_STATE_ISOKINETIC)
+
+
+def _isometric_metrics_type_label(metrics_type: int | None) -> str | None:
+    if metrics_type is None:
+        return None
+    if metrics_type == 0:
+        return "Force"
+    if metrics_type == 1:
+        return "Weight"
+    return str(metrics_type)
 
 
 DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
@@ -76,6 +91,94 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         name="Rep phase",
         icon="mdi:waveform",
         value_fn=lambda state: state.rep_phase,
+    ),
+    VoltraSensorDescription(
+        key="rowing_distance",
+        name="Row distance",
+        device_class=SensorDeviceClass.DISTANCE,
+        native_unit_of_measurement="m",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.rowing_distance_meters,
+        available_fn=lambda state: state.workout_state == 3 or state.rowing_distance_meters is not None,
+    ),
+    VoltraSensorDescription(
+        key="rowing_elapsed",
+        name="Row elapsed",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement="s",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: round(state.rowing_elapsed_millis / 1000, 1) if state.rowing_elapsed_millis is not None else None,
+        available_fn=lambda state: state.workout_state == 3 or state.rowing_elapsed_millis is not None,
+    ),
+    VoltraSensorDescription(
+        key="rowing_pace_500",
+        name="Row pace /500 m",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement="s",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: round(state.rowing_pace_500_millis / 1000, 1) if state.rowing_pace_500_millis is not None else None,
+        available_fn=lambda state: state.workout_state == 3 or state.rowing_pace_500_millis is not None,
+    ),
+    VoltraSensorDescription(
+        key="rowing_average_pace_500",
+        name="Row average pace /500 m",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement="s",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: round(state.rowing_average_pace_500_millis / 1000, 1) if state.rowing_average_pace_500_millis is not None else None,
+        available_fn=lambda state: state.workout_state == 3 or state.rowing_average_pace_500_millis is not None,
+    ),
+    VoltraSensorDescription(
+        key="rowing_stroke_rate",
+        name="Row stroke rate",
+        icon="mdi:counter",
+        native_unit_of_measurement="spm",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.rowing_stroke_rate_spm,
+        available_fn=lambda state: state.workout_state == 3 or state.rowing_stroke_rate_spm is not None,
+    ),
+    VoltraSensorDescription(
+        key="rowing_drive_force",
+        name="Row drive force",
+        icon="mdi:weight-pound",
+        native_unit_of_measurement="lb",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.rowing_drive_force_lb,
+        available_fn=lambda state: state.workout_state == 3 or state.rowing_drive_force_lb is not None,
+    ),
+    VoltraSensorDescription(
+        key="workout_live_force",
+        name="Workout live force",
+        icon="mdi:weight-pound",
+        native_unit_of_measurement="lb",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.workout_live_force_lb,
+    ),
+    VoltraSensorDescription(
+        key="workout_peak_force",
+        name="Workout peak force",
+        icon="mdi:chart-line",
+        native_unit_of_measurement="lb",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.workout_peak_force_lb,
+    ),
+    VoltraSensorDescription(
+        key="workout_peak_power",
+        name="Workout peak power",
+        icon="mdi:flash",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement="W",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.workout_peak_power_watts,
+    ),
+    VoltraSensorDescription(
+        key="workout_time_to_peak",
+        name="Workout time to peak",
+        icon="mdi:timer-outline",
+        device_class=SensorDeviceClass.DURATION,
+        native_unit_of_measurement="s",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: round(state.workout_time_to_peak_millis / 1000, 2) if state.workout_time_to_peak_millis is not None else None,
     ),
     VoltraSensorDescription(
         key="isometric_current_force",
@@ -158,6 +261,23 @@ DESCRIPTIONS: tuple[VoltraSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda state: state.isometric_max_duration_seconds,
         available_fn=lambda state: state.workout_state == 8 or state.isometric_max_duration_seconds is not None,
+    ),
+    VoltraSensorDescription(
+        key="isometric_metrics_type",
+        name="Isometric metrics type",
+        icon="mdi:label-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda state: _isometric_metrics_type_label(state.isometric_metrics_type),
+        available_fn=lambda state: state.workout_state == WORKOUT_STATE_ISOMETRIC or state.isometric_metrics_type is not None,
+    ),
+    VoltraSensorDescription(
+        key="isometric_body_weight",
+        name="Isometric body weight",
+        icon="mdi:scale-bathroom",
+        native_unit_of_measurement="lb",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda state: state.isometric_body_weight_lb,
+        available_fn=lambda state: state.workout_state == WORKOUT_STATE_ISOMETRIC or state.isometric_body_weight_lb is not None,
     ),
     VoltraSensorDescription(
         key="isometric_waveform_samples",
@@ -256,16 +376,27 @@ class VoltraSensor(VoltraEntity, SensorEntity):
                 "workout_mode": state.workout_mode,
                 "loaded": state.load_engaged,
                 "ready_to_load": state.can_load,
+                "row_target_meters": state.rowing_target_meters,
+                "app_current_screen_id": state.app_current_screen_id,
+                "fitness_ongoing_ui": state.fitness_ongoing_ui,
             }
             if state.last_error is not None:
                 attributes["last_error"] = state.last_error
             if state.device_name is not None:
                 attributes["device_name"] = state.device_name
+            if state.safety_reasons:
+                attributes["safety_reasons"] = list(state.safety_reasons)
             return attributes
         if self.entity_description.key == "isometric_waveform_samples":
             return {
                 "last_chunk_index": state.isometric_waveform_last_chunk_index,
                 "average_step_millis": state.isometric_waveform_average_step_millis,
                 "graph_max_force_n": state.isometric_graph_max_force_n,
+            }
+        if self.entity_description.key == "isometric_body_weight":
+            return {
+                "body_weight_n": state.isometric_body_weight_n,
+                "body_weight_100g": state.isometric_body_weight_100g,
+                "metrics_type": _isometric_metrics_type_label(state.isometric_metrics_type),
             }
         return None

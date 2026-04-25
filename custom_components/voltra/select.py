@@ -18,7 +18,9 @@ WORKOUT_OPTIONS = (
     "Inactive",
     "Weight Training",
     "Resistance Band",
+    "Rowing",
     "Damper",
+    "Custom Curve",
     "Isokinetic",
     "Isometric Test",
 )
@@ -48,6 +50,16 @@ PROGRESSIVE_LENGTH_OPTIONS = (
     "ROM",
 )
 
+ROW_TARGET_OPTIONS = (
+    "Just Row",
+    "50 m",
+    "100 m",
+    "500 m",
+    "1000 m",
+    "2000 m",
+    "5000 m",
+)
+
 
 def _is_active_workout(state: VoltraState) -> bool:
     return state.workout_state not in (None, 0)
@@ -55,6 +67,14 @@ def _is_active_workout(state: VoltraState) -> bool:
 
 def _is_resistance_band(state: VoltraState) -> bool:
     return state.workout_state == 2
+
+
+def _row_target_to_option(target_meters: int | None) -> str:
+    return "Just Row" if target_meters is None else f"{target_meters} m"
+
+
+def _option_to_row_target(option: str) -> int | None:
+    return None if option == "Just Row" else int(option.removesuffix(" m"))
 
 
 def _is_isokinetic(state: VoltraState) -> bool:
@@ -66,8 +86,12 @@ def _current_workout_mode(state: VoltraState) -> str:
         return "Weight Training"
     if state.workout_state == 2:
         return "Resistance Band"
+    if state.workout_state == 3:
+        return "Rowing"
     if state.workout_state == 4:
         return "Damper"
+    if state.workout_state == 6:
+        return "Custom Curve"
     if state.workout_state == 7:
         return "Isokinetic"
     if state.workout_state == 8:
@@ -150,6 +174,15 @@ DESCRIPTIONS: tuple[VoltraSelectDescription, ...] = (
         current_option_fn=_current_progressive_length,
         select_fn=lambda coordinator, option: coordinator.client.async_set_resistance_band_by_rom(option == "ROM"),
         available_fn=_is_resistance_band,
+    ),
+    VoltraSelectDescription(
+        key="row_target",
+        name="Row target",
+        icon="mdi:target",
+        options=ROW_TARGET_OPTIONS,
+        entity_category=EntityCategory.CONFIG,
+        current_option_fn=lambda state: _row_target_to_option(state.rowing_target_meters),
+        select_fn=lambda coordinator, option: coordinator.client.async_set_rowing_target_meters(_option_to_row_target(option)),
     ),
     VoltraSelectDescription(
         key="isokinetic_mode",

@@ -74,12 +74,28 @@ DESCRIPTIONS: tuple[VoltraSwitchDescription, ...] = (
         turn_off_fn=lambda coordinator: _async_exit_if_in_mode(coordinator, 2),
     ),
     VoltraSwitchDescription(
+        key="rowing_mode",
+        name="Rowing mode",
+        icon="mdi:rowing",
+        is_on_fn=lambda state: _workout_mode_is(state, 3),
+        turn_on_fn=lambda coordinator: coordinator.client.async_enter_row_mode(),
+        turn_off_fn=lambda coordinator: _async_exit_if_in_mode(coordinator, 3),
+    ),
+    VoltraSwitchDescription(
         key="damper_mode",
         name="Damper mode",
         icon="mdi:fan",
         is_on_fn=lambda state: _workout_mode_is(state, 4),
         turn_on_fn=lambda coordinator: coordinator.client.async_enter_damper_mode(),
         turn_off_fn=lambda coordinator: _async_exit_if_in_mode(coordinator, 4),
+    ),
+    VoltraSwitchDescription(
+        key="custom_curve_mode",
+        name="Custom Curve mode",
+        icon="mdi:chart-bell-curve",
+        is_on_fn=lambda state: _workout_mode_is(state, 6),
+        turn_on_fn=lambda coordinator: coordinator.client.async_enter_custom_curve_mode(),
+        turn_off_fn=lambda coordinator: _async_exit_if_in_mode(coordinator, 6),
     ),
     VoltraSwitchDescription(
         key="isokinetic_mode_switch",

@@ -236,6 +236,164 @@ views:
       - type: conditional
         conditions:
           - entity: select.beyond_power_voltra_workout_mode
+            state: "Rowing"
+        card:
+          type: vertical-stack
+          cards:
+            - type: markdown
+              content: |
+                ## Rowing
+            - type: entities
+              title: Rowing settings
+              show_header_toggle: false
+              entities:
+                - entity: select.beyond_power_voltra_row_target
+                  name: Row target
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - type: tile
+                  entity: number.beyond_power_voltra_rowing_resistance_level
+                  name: Row resistance
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: buttons
+                - type: tile
+                  entity: number.beyond_power_voltra_rowing_simulated_wear_level
+                  name: Simulated wear
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: buttons
+                - type: button
+                  entity: button.beyond_power_voltra_start_row
+                  name: Start row
+                  show_state: true
+                  tap_action:
+                    action: perform-action
+                    perform_action: button.press
+                    target:
+                      entity_id: button.beyond_power_voltra_start_row
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - type: tile
+                  entity: sensor.beyond_power_voltra_rowing_distance
+                  name: Distance
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_rowing_elapsed
+                  name: Elapsed
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_rowing_pace_500
+                  name: Pace /500 m
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_rowing_average_pace_500
+                  name: Avg pace /500 m
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_rowing_stroke_rate
+                  name: Stroke rate
+                  vertical: false
+                - type: tile
+                  entity: sensor.beyond_power_voltra_rowing_drive_force
+                  name: Drive force
+                  vertical: false
+
+      - type: conditional
+        conditions:
+          - entity: select.beyond_power_voltra_workout_mode
+            state: "Custom Curve"
+        card:
+          type: vertical-stack
+          cards:
+            - type: markdown
+              content: |
+                ## Custom Curve
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - type: tile
+                  entity: number.beyond_power_voltra_custom_curve_resistance_min
+                  name: Curve minimum
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+                - type: tile
+                  entity: number.beyond_power_voltra_custom_curve_resistance_limit
+                  name: Curve maximum
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+                - type: tile
+                  entity: number.beyond_power_voltra_custom_curve_range_of_motion
+                  name: Range of motion
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+                - type: button
+                  entity: button.beyond_power_voltra_apply_custom_curve
+                  name: Apply Custom Curve
+                  show_state: true
+                  tap_action:
+                    action: perform-action
+                    perform_action: button.press
+                    target:
+                      entity_id: button.beyond_power_voltra_apply_custom_curve
+            - type: grid
+              columns: 2
+              square: false
+              cards:
+                - type: tile
+                  entity: number.beyond_power_voltra_custom_curve_point_1
+                  name: Curve point 1
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+                - type: tile
+                  entity: number.beyond_power_voltra_custom_curve_point_2
+                  name: Curve point 2
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+                - type: tile
+                  entity: number.beyond_power_voltra_custom_curve_point_3
+                  name: Curve point 3
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+                - type: tile
+                  entity: number.beyond_power_voltra_custom_curve_point_4
+                  name: Curve point 4
+                  features_position: bottom
+                  vertical: false
+                  features:
+                    - type: "numeric-input"
+                      style: slider
+
+      - type: conditional
+        conditions:
+          - entity: select.beyond_power_voltra_workout_mode
             state: "Damper"
         card:
           type: vertical-stack

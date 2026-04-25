@@ -37,6 +37,20 @@ DESCRIPTIONS: tuple[VoltraButtonDescription, ...] = (
         press_fn=lambda coordinator: coordinator.client.async_trigger_cable_length_mode(),
         available_fn=lambda state: state.protocol_validated and state.workout_state not in (None, 0),
     ),
+    VoltraButtonDescription(
+        key="apply_custom_curve",
+        name="Apply Custom Curve",
+        icon="mdi:chart-bell-curve",
+        press_fn=lambda coordinator: coordinator.client.async_apply_custom_curve(),
+        available_fn=lambda state: state.protocol_validated,
+    ),
+    VoltraButtonDescription(
+        key="start_row",
+        name="Start row",
+        icon="mdi:rowing",
+        press_fn=lambda coordinator: coordinator.client.async_start_row(),
+        available_fn=lambda state: state.protocol_validated,
+    ),
 )
 
 

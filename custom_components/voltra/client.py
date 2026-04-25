@@ -30,9 +30,19 @@ from .const import (
 from .models import VoltraState
 from .protocol import (
     AUTO_ISOKINETIC_SPEED_MMS,
+    CMD_BULK_PARAM_WRITE,
     CMD_PARAM_READ,
+    CMD_PARAM_WRITE,
     CMD_SET_DEVICE_NAME,
+    CMD_TELEMETRY,
+    DEFAULT_CUSTOM_CURVE_POINTS,
+    DEFAULT_CUSTOM_CURVE_RANGE_OF_MOTION_IN,
+    DEFAULT_CUSTOM_CURVE_RESISTANCE_LIMIT_LB,
+    DEFAULT_CUSTOM_CURVE_RESISTANCE_MIN_LB,
+    DEFAULT_ROWING_RESISTANCE_LEVEL,
+    DEFAULT_ROWING_SIMULATED_WEAR_LEVEL,
     FITNESS_MODE_ISOMETRIC_ARMED,
+    FITNESS_MODE_ROWING_ACTIVE,
     FITNESS_MODE_TEST_SCREEN,
     FITNESS_MODE_STRENGTH_LOADED,
     FITNESS_MODE_STRENGTH_READY,
@@ -40,20 +50,27 @@ from .protocol import (
     ISOKINETIC_MENU_CONSTANT_RESISTANCE,
     ISOKINETIC_MENU_ISOKINETIC,
     MAX_CABLE_OFFSET_CM,
+    MAX_CUSTOM_CURVE_RANGE_OF_MOTION_IN,
+    MAX_CUSTOM_CURVE_RESISTANCE_LIMIT_LB,
     MAX_ECCENTRIC_WEIGHT_LB,
     MAX_EXTRA_WEIGHT_LB,
     MAX_ISOKINETIC_MAX_ECCENTRIC_LOAD_LB,
     MAX_ISOKINETIC_SPEED_MMS,
     MAX_ISOKINETIC_CONSTANT_RESISTANCE_LB,
+    MAX_ROWING_SELECTOR_LEVEL,
     MAX_RESISTANCE_BAND_FORCE_LB,
     MAX_RESISTANCE_BAND_LENGTH_CM,
     MAX_TARGET_LB,
     MIN_CABLE_OFFSET_CM,
+    MIN_CUSTOM_CURVE_RANGE_OF_MOTION_IN,
+    MIN_CUSTOM_CURVE_RESISTANCE_LIMIT_LB,
+    MIN_CUSTOM_CURVE_RESISTANCE_SPAN_LB,
     MIN_ECCENTRIC_WEIGHT_LB,
     MIN_EXTRA_WEIGHT_LB,
     MIN_ISOKINETIC_MAX_ECCENTRIC_LOAD_LB,
     MIN_ISOKINETIC_SPEED_MMS,
     MIN_ISOKINETIC_CONSTANT_RESISTANCE_LB,
+    MIN_ROWING_SELECTOR_LEVEL,
     MIN_RESISTANCE_BAND_FORCE_LB,
     MIN_RESISTANCE_BAND_LENGTH_CM,
     MIN_TARGET_LB,
@@ -70,34 +87,51 @@ from .protocol import (
     PARAM_FITNESS_ASSIST_MODE,
     PARAM_FITNESS_DAMPER_RATIO_IDX,
     PARAM_FITNESS_INVERSE_CHAIN,
+    PARAM_FITNESS_ROWING_DAMPER_RATIO_IDX,
     PARAM_FITNESS_WORKOUT_STATE,
     PARAM_ISOKINETIC_ECC_CONST_WEIGHT,
     PARAM_ISOKINETIC_ECC_MODE,
     PARAM_ISOKINETIC_ECC_OVERLOAD_WEIGHT,
     PARAM_ISOKINETIC_ECC_SPEED_LIMIT,
     PARAM_MC_DEFAULT_OFFLEN_CM,
+    PARAM_EP_ROW_CHAIN_GEAR,
     PARAM_RESISTANCE_BAND_ALGORITHM,
     PARAM_RESISTANCE_BAND_LEN,
     PARAM_RESISTANCE_BAND_LEN_BY_ROM,
     PARAM_RESISTANCE_BAND_MAX_FORCE,
     PARAM_RESISTANCE_EXPERIENCE,
+    ROWING_ONGOING_UI,
+    ROWING_SCREEN_ID,
     STATUS_REFRESH_PARAMS,
     WORKOUT_STATE_ACTIVE,
+    WORKOUT_STATE_CUSTOM_CURVE,
     WORKOUT_STATE_DAMPER,
     WORKOUT_STATE_INACTIVE,
     WORKOUT_STATE_ISOKINETIC,
     WORKOUT_STATE_ISOMETRIC,
+    WORKOUT_STATE_ROWING,
     WORKOUT_STATE_RESISTANCE_BAND,
     apply_packet_to_state,
+    build_custom_curve_bulk_subscribe_payload,
+    build_custom_curve_vendor_preset_payload,
     build_device_name_payload,
+    build_enter_custom_curve_payload,
+    build_enter_row_payload,
     build_frame,
     build_param_read_frame,
     build_param_write_frame,
+    build_row_bulk_subscribe_payload,
+    build_set_fitness_data_notify_hz_payload,
+    build_set_fitness_data_notify_subscribe_payload,
+    build_set_rowing_resistance_level_payload,
+    build_set_rowing_simulated_wear_level_payload,
+    build_trigger_row_start_screen_payload,
     build_vendor_state_refresh_frame,
     encode_int16_le,
     encode_uint16_le,
     encode_uint32_le,
     is_isokinetic_workout_state,
+    rowing_selector_wire_index,
 )
 
 if TYPE_CHECKING:
@@ -108,6 +142,7 @@ _LOGGER = logging.getLogger(__name__)
 PARAM_READ_FRAME_IDS_PER_CHUNK = 2
 ISOMETRIC_VENDOR_REFRESH_INTERVAL_SECONDS = 0.5
 ISOMETRIC_VENDOR_REFRESH_BURST_SECONDS = 3.0
+ROW_VENDOR_REFRESH_BURST_SECONDS = 12.0
 CONNECTED_IDLE_LOOP_INTERVAL_SECONDS = 1.0
 
 
@@ -184,14 +219,61 @@ class VoltraBleClient:
             await self.async_set_strength_mode()
         elif option == "Resistance Band":
             await self.async_enter_resistance_band_mode()
+        elif option == "Rowing":
+            await self.async_enter_row_mode()
         elif option == "Damper":
             await self.async_enter_damper_mode()
+        elif option == "Custom Curve":
+            await self.async_enter_custom_curve_mode()
         elif option == "Isokinetic":
             await self.async_enter_isokinetic_mode()
         elif option == "Isometric Test":
             await self.async_enter_isometric_mode()
         else:
             raise VoltraApiError(f"Unsupported workout mode: {option}")
+
+    async def async_set_custom_curve_point(self, index: int, value_percent: float) -> None:
+        self._require_control_ready("Custom Curve is not ready yet.")
+        if index not in range(0, len(self._state.custom_curve_points)):
+            raise VoltraApiError(f"Unsupported Custom Curve point index: {index}")
+        points = list(self._state.custom_curve_points)
+        points[index] = max(0.0, min(1.0, float(value_percent) / 100.0))
+        self._push_state(replace(self._state, custom_curve_points=tuple(points)))
+
+    async def async_set_custom_curve_resistance_min(self, value: float) -> None:
+        self._require_control_ready("Custom Curve is not ready yet.")
+        current_limit = self._state.custom_curve_resistance_limit_lb or DEFAULT_CUSTOM_CURVE_RESISTANCE_LIMIT_LB
+        maximum = max(
+            MIN_CUSTOM_CURVE_RESISTANCE_LIMIT_LB,
+            current_limit - MIN_CUSTOM_CURVE_RESISTANCE_SPAN_LB,
+        )
+        normalized = self._clamp_round(value, MIN_CUSTOM_CURVE_RESISTANCE_LIMIT_LB, maximum)
+        self._push_state(replace(self._state, custom_curve_resistance_min_lb=normalized))
+
+    async def async_set_custom_curve_resistance_limit(self, value: float) -> None:
+        self._require_control_ready("Custom Curve is not ready yet.")
+        current_min = self._state.custom_curve_resistance_min_lb or DEFAULT_CUSTOM_CURVE_RESISTANCE_MIN_LB
+        minimum = min(
+            MAX_CUSTOM_CURVE_RESISTANCE_LIMIT_LB,
+            current_min + MIN_CUSTOM_CURVE_RESISTANCE_SPAN_LB,
+        )
+        normalized = self._clamp_round(value, minimum, MAX_CUSTOM_CURVE_RESISTANCE_LIMIT_LB)
+        self._push_state(replace(self._state, custom_curve_resistance_limit_lb=normalized))
+
+    async def async_set_custom_curve_range_of_motion(self, value: float) -> None:
+        self._require_control_ready("Custom Curve is not ready yet.")
+        normalized = self._clamp_round(
+            value,
+            MIN_CUSTOM_CURVE_RANGE_OF_MOTION_IN,
+            MAX_CUSTOM_CURVE_RANGE_OF_MOTION_IN,
+        )
+        self._push_state(replace(self._state, custom_curve_range_of_motion_in=normalized))
+
+    async def async_set_rowing_target_meters(self, target_meters: int | None) -> None:
+        self._require_control_ready("Row target is not ready yet.")
+        if target_meters not in (None, 50, 100, 500, 1000, 2000, 5000):
+            raise VoltraApiError(f"Unsupported Row target distance: {target_meters}")
+        self._push_state(replace(self._state, rowing_target_meters=target_meters))
 
     async def async_set_target_load(self, value: float) -> None:
         await self._async_send_param_write(
@@ -315,6 +397,287 @@ class VoltraBleClient:
                 ),
             ],
         )
+
+    async def async_enter_row_mode(self) -> None:
+        self._require_control_ready("Row Mode is not ready yet.")
+        rowing_resistance_level = self._state.rowing_resistance_level or DEFAULT_ROWING_RESISTANCE_LEVEL
+        rowing_simulated_wear_level = self._state.rowing_simulated_wear_level or DEFAULT_ROWING_SIMULATED_WEAR_LEVEL
+        self._push_state(
+            replace(
+                self._state,
+                workout_mode="Rowing, Ready",
+                workout_state=WORKOUT_STATE_ROWING,
+                fitness_mode=FITNESS_MODE_STRENGTH_READY,
+                can_load=True,
+                safety_reasons=("Ready for current mode load.",),
+                load_engaged=False,
+                ready=True,
+                rowing_resistance_level=rowing_resistance_level,
+                rowing_simulated_wear_level=rowing_simulated_wear_level,
+                rowing_distance_meters=None,
+                rowing_elapsed_millis=None,
+                rowing_pace_500_millis=None,
+                rowing_average_pace_500_millis=None,
+                rowing_stroke_rate_spm=None,
+                rowing_drive_force_lb=None,
+                rowing_telemetry_start_millis=None,
+                rowing_last_stroke_start_millis=None,
+                rowing_distance_samples_meters=(),
+                rowing_force_samples_lb=(),
+                rowing_force_last_chunk_index=None,
+                app_current_screen_id=None,
+                fitness_ongoing_ui=None,
+                set_count=0,
+                rep_count=0,
+                rep_phase="Ready",
+            ),
+        )
+        frames: list[tuple[str, bytes]] = [
+            (
+                "subscribe Row fitness data stream",
+                build_frame(
+                    cmd=CMD_PARAM_WRITE,
+                    payload=build_set_fitness_data_notify_subscribe_payload(),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                "bulk subscribe Row params",
+                build_frame(
+                    cmd=CMD_BULK_PARAM_WRITE,
+                    payload=build_row_bulk_subscribe_payload(),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                "set Row fitness data notify hz",
+                build_frame(
+                    cmd=CMD_PARAM_WRITE,
+                    payload=build_set_fitness_data_notify_hz_payload(),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                f"set Row resistance level ({rowing_resistance_level})",
+                build_frame(
+                    cmd=CMD_PARAM_WRITE,
+                    payload=build_set_rowing_resistance_level_payload(rowing_resistance_level),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                f"set Row simulated wear ({rowing_simulated_wear_level})",
+                build_frame(
+                    cmd=CMD_PARAM_WRITE,
+                    payload=build_set_rowing_simulated_wear_level_payload(rowing_simulated_wear_level),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                "enter Row Mode",
+                build_frame(
+                    cmd=CMD_PARAM_WRITE,
+                    payload=build_enter_row_payload(),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                "refresh Row monitor stream",
+                build_frame(
+                    cmd=CMD_TELEMETRY,
+                    payload=bytes((0x13, 0x01)),
+                    seq=self._next_sequence(),
+                ),
+            ),
+        ]
+        frames.extend(self._build_chunked_param_read_frames(MODE_FEATURE_STATUS_PARAMS, "read Row mode feature state"))
+        await self._async_write_frames(frames)
+        self._extend_isometric_vendor_refresh_burst(ROW_VENDOR_REFRESH_BURST_SECONDS)
+
+    async def async_start_row(self, target_meters: int | None = None) -> None:
+        self._require_control_ready("Rowing is not ready yet.")
+        resolved_target = self._state.rowing_target_meters if target_meters is None else target_meters
+        if resolved_target not in (None, 50, 100, 500, 1000, 2000, 5000):
+            raise VoltraApiError(f"Unsupported Row target distance: {resolved_target}")
+        if self._state.workout_state != WORKOUT_STATE_ROWING:
+            await self.async_enter_row_mode()
+
+        start_millis = int(time.time() * 1000)
+        row_target_label = "Just Row" if resolved_target is None else f"{resolved_target} m row"
+        self._push_state(
+            replace(
+                self._state,
+                workout_mode="Rowing, Live",
+                workout_state=WORKOUT_STATE_ROWING,
+                fitness_mode=FITNESS_MODE_ROWING_ACTIVE,
+                can_load=False,
+                safety_reasons=(f"{row_target_label} is live.",),
+                load_engaged=True,
+                ready=False,
+                rowing_target_meters=resolved_target,
+                rowing_distance_meters=None,
+                rowing_elapsed_millis=None,
+                rowing_pace_500_millis=None,
+                rowing_average_pace_500_millis=None,
+                rowing_stroke_rate_spm=None,
+                rowing_drive_force_lb=None,
+                rowing_telemetry_start_millis=start_millis,
+                rowing_last_stroke_start_millis=None,
+                rowing_distance_samples_meters=(),
+                rowing_force_samples_lb=(),
+                rowing_force_last_chunk_index=None,
+                app_current_screen_id=ROWING_SCREEN_ID,
+                fitness_ongoing_ui=ROWING_ONGOING_UI,
+                set_count=0,
+                rep_count=0,
+                rep_phase="Ready",
+            ),
+        )
+        frames = [
+            (
+                "trigger Row start screen action",
+                build_frame(
+                    cmd=CMD_PARAM_WRITE,
+                    payload=build_trigger_row_start_screen_payload(resolved_target),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                "refresh Row monitor stream",
+                build_frame(
+                    cmd=CMD_TELEMETRY,
+                    payload=bytes((0x13, 0x01)),
+                    seq=self._next_sequence(),
+                ),
+            ),
+        ]
+        frames.extend(self._build_chunked_param_read_frames(MODE_FEATURE_STATUS_PARAMS, "read Row mode feature state"))
+        await self._async_write_frames(frames)
+        self._extend_isometric_vendor_refresh_burst(ROW_VENDOR_REFRESH_BURST_SECONDS)
+
+    async def async_set_rowing_resistance_level(self, value: float) -> None:
+        self._require_control_ready("Row resistance is not ready yet.")
+        normalized = self._clamp_round(value, MIN_ROWING_SELECTOR_LEVEL, MAX_ROWING_SELECTOR_LEVEL)
+        self._push_state(replace(self._state, rowing_resistance_level=normalized))
+        await self._async_send_param_write(
+            param_id=PARAM_FITNESS_ROWING_DAMPER_RATIO_IDX,
+            value=bytes((rowing_selector_wire_index(normalized),)),
+            label=f"set Row resistance level ({normalized})",
+        )
+
+    async def async_set_rowing_simulated_wear_level(self, value: float) -> None:
+        self._require_control_ready("Row simulated wear is not ready yet.")
+        normalized = self._clamp_round(value, MIN_ROWING_SELECTOR_LEVEL, MAX_ROWING_SELECTOR_LEVEL)
+        self._push_state(replace(self._state, rowing_simulated_wear_level=normalized))
+        await self._async_send_param_write(
+            param_id=PARAM_EP_ROW_CHAIN_GEAR,
+            value=bytes((rowing_selector_wire_index(normalized),)),
+            label=f"set Row simulated wear ({normalized})",
+        )
+
+    async def async_apply_custom_curve(self) -> None:
+        await self._async_queue_custom_curve_mode()
+
+    async def async_enter_custom_curve_mode(self) -> None:
+        await self._async_queue_custom_curve_mode()
+
+    async def _async_queue_custom_curve_mode(self) -> None:
+        self._require_control_ready("Custom Curve is not ready yet.")
+        points = tuple(float(point) for point in self._state.custom_curve_points)
+        resistance_min_lb = self._state.custom_curve_resistance_min_lb or DEFAULT_CUSTOM_CURVE_RESISTANCE_MIN_LB
+        resistance_limit_lb = self._state.custom_curve_resistance_limit_lb or DEFAULT_CUSTOM_CURVE_RESISTANCE_LIMIT_LB
+        range_of_motion_in = self._state.custom_curve_range_of_motion_in or DEFAULT_CUSTOM_CURVE_RANGE_OF_MOTION_IN
+        try:
+            vendor_payload = build_custom_curve_vendor_preset_payload(
+                points=points,
+                resistance_min_lb=resistance_min_lb,
+                resistance_limit_lb=resistance_limit_lb,
+                range_of_motion_in=range_of_motion_in,
+            )
+        except ValueError as err:
+            raise VoltraApiError(str(err)) from err
+
+        self._push_state(
+            replace(
+                self._state,
+                workout_mode="Custom Curve, Ready",
+                workout_state=WORKOUT_STATE_CUSTOM_CURVE,
+                fitness_mode=FITNESS_MODE_STRENGTH_READY,
+                can_load=True,
+                safety_reasons=("Ready for current mode load.",),
+                load_engaged=False,
+                ready=True,
+                custom_curve_points=points,
+                custom_curve_resistance_min_lb=resistance_min_lb,
+                custom_curve_resistance_limit_lb=resistance_limit_lb,
+                custom_curve_range_of_motion_in=range_of_motion_in,
+                force_lb=None,
+                rowing_distance_meters=None,
+                rowing_elapsed_millis=None,
+                rowing_pace_500_millis=None,
+                rowing_average_pace_500_millis=None,
+                rowing_stroke_rate_spm=None,
+                rowing_drive_force_lb=None,
+                rowing_telemetry_start_millis=None,
+                rowing_last_stroke_start_millis=None,
+                rowing_distance_samples_meters=(),
+                rowing_force_samples_lb=(),
+                rowing_force_last_chunk_index=None,
+                app_current_screen_id=None,
+                fitness_ongoing_ui=None,
+                set_count=0,
+                rep_count=0,
+                rep_phase="Ready",
+            ),
+        )
+        frames: list[tuple[str, bytes]] = [
+            (
+                "subscribe Custom Curve fitness data stream",
+                build_frame(
+                    cmd=CMD_PARAM_WRITE,
+                    payload=build_set_fitness_data_notify_subscribe_payload(),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                "bulk subscribe Custom Curve params",
+                build_frame(
+                    cmd=CMD_BULK_PARAM_WRITE,
+                    payload=build_custom_curve_bulk_subscribe_payload(),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                "set Custom Curve fitness data notify hz",
+                build_frame(
+                    cmd=CMD_PARAM_WRITE,
+                    payload=build_set_fitness_data_notify_hz_payload(),
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                f"set Custom Curve resistance min ({resistance_min_lb} lb)",
+                build_param_write_frame(PARAM_BP_BASE_WEIGHT, encode_uint16_le(resistance_min_lb), self._next_sequence()),
+            ),
+            (
+                "upload Custom Curve",
+                build_frame(
+                    cmd=CMD_TELEMETRY,
+                    payload=vendor_payload,
+                    seq=self._next_sequence(),
+                ),
+            ),
+            (
+                "enter Custom Curve",
+                build_frame(
+                    cmd=CMD_PARAM_WRITE,
+                    payload=build_enter_custom_curve_payload(),
+                    seq=self._next_sequence(),
+                ),
+            ),
+        ]
+        frames.extend(self._build_chunked_param_read_frames(MODE_FEATURE_STATUS_PARAMS, "read Custom Curve mode feature state"))
+        await self._async_write_frames(frames)
 
     async def async_enter_damper_mode(self) -> None:
         await self._async_send_param_write(
@@ -466,6 +829,9 @@ class VoltraBleClient:
         self._require_control_ready("Load is unavailable")
         if not self._state.can_load:
             raise VoltraApiError("; ".join(self._state.safety_reasons))
+        if self._state.workout_state == WORKOUT_STATE_ROWING:
+            await self.async_start_row(self._state.rowing_target_meters)
+            return
         if self._state.workout_state == WORKOUT_STATE_ISOMETRIC:
             self._extend_isometric_vendor_refresh_burst()
             await self._async_write_frames(
@@ -492,6 +858,31 @@ class VoltraBleClient:
                 ],
             )
             return
+        if self._state.workout_state == WORKOUT_STATE_CUSTOM_CURVE:
+            await self._async_write_frames(
+                [
+                    (
+                        "read Custom Curve cable position",
+                        build_param_read_frame(
+                            (PARAM_MC_DEFAULT_OFFLEN_CM, PARAM_BP_RUNTIME_POSITION_CM),
+                            self._next_sequence(),
+                        ),
+                    ),
+                    (
+                        "load Custom Curve",
+                        build_param_write_frame(
+                            PARAM_BP_SET_FITNESS_MODE,
+                            encode_uint16_le(FITNESS_MODE_STRENGTH_LOADED),
+                            self._next_sequence(),
+                        ),
+                    ),
+                    (
+                        "refresh Custom Curve vendor state stream",
+                        build_vendor_state_refresh_frame(self._next_sequence()),
+                    ),
+                ],
+            )
+            return
         writes: list[tuple[str, int, bytes]] = []
         if self._state.workout_state in (None, WORKOUT_STATE_INACTIVE):
             writes.append(
@@ -504,6 +895,38 @@ class VoltraBleClient:
 
     async def async_unload(self) -> None:
         self._isometric_vendor_refresh_until = 0.0
+        if self._state.workout_state == WORKOUT_STATE_ROWING or bool(self._state.workout_mode and self._state.workout_mode.startswith("Rowing")):
+            self._push_state(
+                replace(
+                    self._state,
+                    workout_mode="Rowing, Ready",
+                    workout_state=WORKOUT_STATE_ROWING,
+                    fitness_mode=FITNESS_MODE_STRENGTH_READY,
+                    can_load=True,
+                    safety_reasons=("Rowing is ready. Start Row again before another row.",),
+                    load_engaged=False,
+                    ready=True,
+                    rowing_telemetry_start_millis=None,
+                    rowing_last_stroke_start_millis=None,
+                    rowing_drive_force_lb=None,
+                    rep_phase="Ready",
+                ),
+            )
+        elif self._state.workout_state == WORKOUT_STATE_CUSTOM_CURVE or bool(self._state.workout_mode and self._state.workout_mode.startswith("Custom Curve")):
+            self._push_state(
+                replace(
+                    self._state,
+                    workout_mode="Custom Curve, Ready",
+                    workout_state=WORKOUT_STATE_CUSTOM_CURVE,
+                    fitness_mode=FITNESS_MODE_STRENGTH_READY,
+                    can_load=True,
+                    safety_reasons=("Ready for current mode load.",),
+                    load_engaged=False,
+                    ready=True,
+                    force_lb=None,
+                    rep_phase="Ready",
+                ),
+            )
         await self._async_send_param_write(
             param_id=PARAM_BP_SET_FITNESS_MODE,
             value=encode_uint16_le(FITNESS_MODE_STRENGTH_READY),
@@ -783,15 +1206,26 @@ class VoltraBleClient:
         return PROTOCOL_RETRY_INTERVAL_SECONDS
 
     def _should_run_isometric_vendor_refresh(self) -> bool:
+        refresh_window_open = time.monotonic() < self._isometric_vendor_refresh_until
+        row_monitor_active = (
+            self._state.workout_state == WORKOUT_STATE_ROWING
+            and bool(self._state.workout_mode and self._state.workout_mode.startswith("Rowing"))
+            and refresh_window_open
+        )
         return (
             self._state.connected
             and self._state.protocol_validated
-            and self._state.workout_state == WORKOUT_STATE_ISOMETRIC
             and (
-                time.monotonic() < self._isometric_vendor_refresh_until
-                or self._state.load_engaged is True
-                or self._state.isometric_current_force_n is not None
-                or self._state.fitness_mode == FITNESS_MODE_TEST_SCREEN
+                row_monitor_active
+                or (
+                    self._state.workout_state == WORKOUT_STATE_ISOMETRIC
+                    and (
+                        refresh_window_open
+                        or self._state.load_engaged is True
+                        or self._state.isometric_current_force_n is not None
+                        or self._state.fitness_mode == FITNESS_MODE_TEST_SCREEN
+                    )
+                )
             )
         )
 
