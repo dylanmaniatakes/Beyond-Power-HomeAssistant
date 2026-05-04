@@ -74,3 +74,6 @@ A ready-to-import Lovelace dashboard template is included in [dashboards/README.
 - This integration assumes Home Assistant is running on hardware with reliable Bluetooth access to the Voltra.
 - The component keeps retrying the recovered bootstrap until the protocol validates.
 - This repository is the shareable Home Assistant package for the integration.
+
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/W7W41QWZNC)
